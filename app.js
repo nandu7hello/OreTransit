@@ -107,27 +107,59 @@ function minutesLabel(target, now) {
 
 /* ---------- Hooks ---------- */
 
+// Location states: idle (not asked yet), asking, on, denied (user/OS blocked it),
+// timeout (allowed but no fix yet), unavailable (no GPS API or insecure page).
 function useGeolocation() {
   const [loc, setLoc] = useState({ status: "idle", pos: null, accuracy: null });
   const watchId = useRef(null);
+  const secure = typeof window !== "undefined" && (window.isSecureContext || location.hostname === "localhost");
 
+  const onFix = (p) => setLoc({ status: "on", pos: { lat: p.coords.latitude, lon: p.coords.longitude }, accuracy: p.coords.accuracy });
+  const onError = (err) =>
+    setLoc((l) => {
+      if (err.code === 1) return { status: "denied", pos: null, accuracy: null };
+      if (l.status === "on") return l; // keep the last good fix on a transient error
+      return { status: err.code === 3 ? "timeout" : "unavailable", pos: null, accuracy: null };
+    });
+
+  // Must be called from a tap on iOS/Android so the permission prompt is shown.
   const start = () => {
-    if (!("geolocation" in navigator)) {
+    if (!("geolocation" in navigator) || !secure) {
       setLoc({ status: "unavailable", pos: null, accuracy: null });
       return;
     }
     if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
     setLoc((l) => ({ ...l, status: "asking" }));
-    watchId.current = navigator.geolocation.watchPosition(
-      (p) => setLoc({ status: "on", pos: { lat: p.coords.latitude, lon: p.coords.longitude }, accuracy: p.coords.accuracy }),
-      (err) => setLoc({ status: err.code === 1 ? "denied" : "unavailable", pos: null, accuracy: null }),
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
-    );
+    // Quick coarse fix first (Wi-Fi/cell), then keep a precise watch running.
+    navigator.geolocation.getCurrentPosition(onFix, onError, { enableHighAccuracy: false, maximumAge: 60000, timeout: 12000 });
+    watchId.current = navigator.geolocation.watchPosition(onFix, onError, { enableHighAccuracy: true, maximumAge: 5000, timeout: 45000 });
   };
 
   useEffect(() => {
-    start();
+    // Start automatically only when permission was already granted; otherwise wait for a tap.
+    if (!("geolocation" in navigator) || !secure) {
+      setLoc({ status: "unavailable", pos: null, accuracy: null });
+      return;
+    }
+    let cancelled = false;
+    if (navigator.permissions?.query) {
+      navigator.permissions
+        .query({ name: "geolocation" })
+        .then((res) => {
+          if (cancelled) return;
+          if (res.state === "granted") start();
+          else if (res.state === "denied") setLoc({ status: "denied", pos: null, accuracy: null });
+          res.onchange = () => {
+            if (res.state === "granted") start();
+            else if (res.state === "denied") setLoc({ status: "denied", pos: null, accuracy: null });
+          };
+        })
+        .catch(() => start());
+    } else {
+      start(); // older Safari: no Permissions API, ask straight away
+    }
     return () => {
+      cancelled = true;
       if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
     };
   }, []);
@@ -320,18 +352,53 @@ function BottomNav({ active, onHome, onExplore, onSchedule }) {
 }
 
 function LocationNote({ geo, className }) {
-  const text =
-    geo.status === "on"
-      ? `Live GPS · ±${Math.round(geo.accuracy ?? 0)} m`
-      : geo.status === "asking"
-        ? "Finding your location…"
-        : geo.status === "denied"
-          ? "Location blocked · tap to retry"
-          : "Location off · tap to retry";
-  const canRetry = geo.status !== "on" && geo.status !== "asking";
-  return html`<button type="button" class=${`${className} ${geo.status === "on" ? "live" : ""}`} onClick=${canRetry ? geo.retry : undefined}>
-    <${Icon} name=${geo.status === "on" ? "gps" : "info"} size=${16} /> ${text}
-  </button>`;
+  const [help, setHelp] = useState(false);
+  const label = {
+    on: `GPS ±${Math.round(geo.accuracy ?? 0)} m`,
+    asking: "Locating…",
+    idle: "Use my location",
+    denied: "Location blocked",
+    timeout: "No GPS fix · retry",
+    unavailable: "Location unavailable",
+  }[geo.status];
+  const onTap = () => {
+    if (geo.status === "on" || geo.status === "asking") return;
+    if (geo.status === "denied" || geo.status === "unavailable") setHelp(true);
+    else geo.retry();
+  };
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  return html`<button type="button" class=${`${className} compact ${geo.status === "on" ? "live" : ""}`} onClick=${onTap} aria-label=${label}>
+      <${Icon} name=${geo.status === "on" ? "gps" : geo.status === "idle" ? "pin" : "info"} size=${14} /> ${label}
+    </button>
+    ${help &&
+    html`<div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Turn on location">
+      <div class="sheet help-sheet">
+        <div class="sheet-handle"></div>
+        <header>
+          <span></span>
+          <div><small>Location</small><h2>Turn on location</h2></div>
+          <button type="button" class="icon-button" onClick=${() => setHelp(false)} aria-label="Close"><${Icon} name="x" /></button>
+        </header>
+        <div class="help-body">
+          ${geo.status === "unavailable"
+            ? html`<p>This page can't use GPS. Location only works on a secure https:// address or when installed from one, and not inside the claude.ai preview.</p>`
+            : ios
+              ? html`<p>Location was declined for this site, so the browser won't ask again. To allow it:</p>
+                  <ol>
+                    <li>In Safari, tap the <b>AA</b> (or <b>⋯</b>) button in the address bar, then <b>Website Settings</b>, and set <b>Location</b> to <b>Allow</b>.</li>
+                    <li>If it's greyed out, open <b>Settings → Privacy & Security → Location Services</b>, make sure it is on, then set <b>Safari Websites</b> to <b>While Using the App</b>.</li>
+                    <li>If you added OreTransit to your Home Screen, the same setting is under <b>Settings → Safari → Location</b>.</li>
+                  </ol>`
+              : html`<p>Location was declined for this site, so the browser won't ask again. To allow it:</p>
+                  <ol>
+                    <li>Tap the <b>lock</b> (or tune) icon next to the address, then <b>Permissions</b> → <b>Location</b> → <b>Allow</b>.</li>
+                    <li>Make sure your phone's Location is switched on and Chrome is allowed to use it in <b>Settings → Apps → Chrome → Permissions</b>.</li>
+                  </ol>`}
+          <p>Then reload the page and tap <b>Use my location</b>.</p>
+          <button type="button" class="end-trip-button" onClick=${() => { setHelp(false); geo.retry(); }}>Try again now</button>
+        </div>
+      </div>
+    </div>`}`;
 }
 
 /* ---------- App ---------- */

@@ -471,3 +471,13 @@ h1{letter-spacing:-.7px;margin:0;font-family:DM Serif Display,serif;font-size:31
 .mini-timetable tr.past-trip{opacity:.45}
 .mini-timetable tr.next-trip th,.mini-timetable tr.next-trip td{background:#fff3c4;font-weight:700}
 .mini-timetable td.estimated{color:#75787d;font-style:italic}
+
+/* ---- Compact location chip + help sheet ---- */
+.home-map-note.compact{font-size:12px;font-weight:600;padding:7px 11px;gap:6px;max-width:calc(100% - 150px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:999px;line-height:1.2}
+.home-map-note.compact svg{flex:none}
+.help-sheet{height:auto;max-height:min(80dvh,620px)}
+.help-sheet header{grid-template-columns:42px 1fr 42px}
+.help-body{padding:4px 22px 26px;overflow:auto;color:#102343;font-size:14px;line-height:1.5}
+.help-body ol{padding-left:20px;margin:8px 0 14px}
+.help-body li{margin-bottom:8px}
+.help-body .end-trip-button{margin-top:6px;width:100%}

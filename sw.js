@@ -1,7 +1,7 @@
 // Offline cache for OreTransit.
 // Code files are network-first (so updates arrive as soon as you're online);
 // maps, icons and fonts are cache-first (big and rarely change).
-const CACHE = "oretransit-v3";
+const CACHE = "oretransit-v4";
 const PRECACHE = [
   "./",
   "./index.html",
