@@ -15,10 +15,10 @@ import {
   tripTimes,
   nextDepartures,
   nextTrip,
-  lastDeparture,
   fromMinutes,
   nowInGolden,
 } from "./schedule.js";
+import { loadGraph, graphReady, walkTo, rideCoords, shuttlePath, fmtDistance } from "./routing.js";
 
 const LOGO = "assets/ore-cart-logo.png";
 const OVERVIEW_MAP = "assets/all-routes-map.png";
@@ -228,6 +228,104 @@ function tripPath(a, b) {
   return `M ${a.x} ${a.y} C ${a.x} ${mid}, ${b.x} ${mid}, ${b.x} ${b.y}`;
 }
 
+// Project a lat/lon polyline onto an artwork map as SVG "points" (percent units).
+function geoPoints(fitKey, coords) {
+  return coords.map(([lat, lon]) => { const p = geoToMap(fitKey, lat, lon); return `${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join(" ");
+}
+
+// Street legs for a selected trip: [{coords, color, dashed}]
+function tripLegs(trip, pos) {
+  if (trip.length < 1 || !graphReady()) return [];
+  const legs = [];
+  const a = trip[0];
+  const ra = ROUTES[a.route];
+  const walk = pos ? walkTo(pos, ra.stops[a.index]) : null;
+  if (walk) legs.push({ coords: walk.coords, color: "#2f6fed", dashed: true, kind: "walk", walk });
+  if (trip.length === 2) {
+    const b = trip[1];
+    if (a.route === b.route) {
+      legs.push({ coords: rideCoords(a.route, a.index, b.index), color: ra.color, kind: "ride" });
+    } else {
+      const t = TRANSFERS[[a.route, b.route].sort().join("-")];
+      legs.push({ coords: rideCoords(a.route, a.index, t[a.route]), color: ra.color, kind: "ride" });
+      legs.push({ coords: rideCoords(b.route, t[b.route], b.index), color: ROUTES[b.route].color, kind: "ride" });
+    }
+  }
+  return legs;
+}
+
+function ArtworkLegs({ fitKey, legs }) {
+  if (!legs.length) return null;
+  return html`<svg class="map-trip-path street" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    ${legs.map((l, i) => html`<polyline key=${i} points=${geoPoints(fitKey, l.coords)} stroke=${l.color} stroke-dasharray=${l.dashed ? "1.2 0.9" : "none"} />`)}
+  </svg>`;
+}
+
+/* ---------- Real street map (Leaflet + OpenStreetMap tiles) ---------- */
+
+function StreetMap({ legs, markers, pos, live, height = 320, follow = false }) {
+  const box = useRef(null);
+  const mapRef = useRef(null);
+  const layerRef = useRef(null);
+  const youRef = useRef(null);
+
+  useEffect(() => {
+    if (!window.L || !box.current) return;
+    const L = window.L;
+    const map = L.map(box.current, { zoomControl: true, attributionControl: true, tap: false });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+    map.setView([39.7508, -105.2214], 15);
+    mapRef.current = map;
+    layerRef.current = L.layerGroup().addTo(map);
+    return () => { map.remove(); mapRef.current = null; };
+  }, []);
+
+  // draw legs + markers
+  useEffect(() => {
+    const L = window.L, map = mapRef.current; if (!L || !map) return;
+    const g = layerRef.current; g.clearLayers();
+    const bounds = [];
+    for (const l of legs) {
+      if (l.coords.length < 2) continue;
+      L.polyline(l.coords, { color: "#ffffff", weight: 9, opacity: 0.9 }).addTo(g);
+      L.polyline(l.coords, { color: l.color, weight: 5, opacity: 0.95, dashArray: l.dashed ? "2 10" : null, lineCap: "round" }).addTo(g);
+      l.coords.forEach((c) => bounds.push(c));
+    }
+    for (const m of markers) {
+      const icon = L.divIcon({ className: "lf-stop", html: `<span style="background:${m.color}">${m.label}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+      L.marker([m.lat, m.lon], { icon, title: m.name }).bindTooltip(m.name, { direction: "top", offset: [0, -12] }).addTo(g);
+      bounds.push([m.lat, m.lon]);
+    }
+    if (pos) bounds.push([pos.lat, pos.lon]);
+    if (bounds.length > 1 && !follow) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 17 });
+    else if (bounds.length === 1) map.setView(bounds[0], 16);
+  }, [JSON.stringify(legs.map((l) => l.coords.length + l.color)), JSON.stringify(markers.map((m) => m.lat + "," + m.lon))]);
+
+  // live "you" marker
+  useEffect(() => {
+    const L = window.L, map = mapRef.current; if (!L || !map || !pos) return;
+    if (!youRef.current) {
+      youRef.current = L.marker([pos.lat, pos.lon], { icon: L.divIcon({ className: `lf-you ${live ? "live" : ""}`, html: "<i></i>", iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 1000 }).addTo(map);
+    } else {
+      youRef.current.setLatLng([pos.lat, pos.lon]);
+      youRef.current.setIcon(L.divIcon({ className: `lf-you ${live ? "live" : ""}`, html: "<i></i>", iconSize: [18, 18], iconAnchor: [9, 9] }));
+    }
+    if (follow) map.panTo([pos.lat, pos.lon], { animate: true });
+  }, [pos?.lat, pos?.lon, live, follow]);
+
+  return html`<div class="street-map" ref=${box} style=${{ height: `${height}px` }} aria-label="Street map with directions"></div>`;
+}
+
+function WalkSteps({ walk }) {
+  if (!walk) return null;
+  return html`<ol class="walk-steps">
+    ${walk.steps.map((s, i) => html`<li key=${i}><span>${s.text}</span>${s.distance ? html`<small>${fmtDistance(s.distance)}</small>` : ""}</li>`)}
+  </ol>`;
+}
+
 /* ---------- "You" marker ---------- */
 
 function YouMarker({ fitKey, pos, live, className, label }) {
@@ -242,7 +340,7 @@ function YouMarker({ fitKey, pos, live, className, label }) {
 
 /* ---------- Home hero map (all routes) ---------- */
 
-function HomeMap({ selectedStops, onSelectStop, pos, live }) {
+function HomeMap({ selectedStops, onSelectStop, pos, live, legs = [] }) {
   const box = useRef(null);
   const [view, setView] = useState({ zoom: 1.18, x: -24, y: -12 });
   const { handlers, zoomBy } = usePanZoom(view, setView, { max: 2.1 });
@@ -255,10 +353,12 @@ function HomeMap({ selectedStops, onSelectStop, pos, live }) {
     <div class="home-overview-canvas" style=${transformStyle(view)}>
       <img src=${OVERVIEW_MAP} alt="Map of the Gold, Silver, and Tungsten Ore Cart routes" draggable="false" />
       <${YouMarker} fitKey="overview" pos=${pos} live=${live} className="home-location" label=${live ? "YOU" : "CAMPUS (location off)"} />
-      ${selectedStops.length === 2 &&
-      html`<svg class="map-trip-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <path d=${tripPath(OVERVIEW_STOPS[selectedStops[0].route][selectedStops[0].index], OVERVIEW_STOPS[selectedStops[1].route][selectedStops[1].index])} />
-      </svg>`}
+      ${legs.length
+        ? html`<${ArtworkLegs} fitKey="overview" legs=${legs} />`
+        : selectedStops.length === 2 &&
+          html`<svg class="map-trip-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <path d=${tripPath(OVERVIEW_STOPS[selectedStops[0].route][selectedStops[0].index], OVERVIEW_STOPS[selectedStops[1].route][selectedStops[1].index])} />
+          </svg>`}
       ${ROUTE_KEYS.flatMap((key) =>
         OVERVIEW_STOPS[key].map((p, i) => {
           const route = ROUTES[key];
@@ -420,6 +520,10 @@ function App() {
 
   const geo = useGeolocation();
   const now = useClock();
+  const [routingReady, setRoutingReady] = useState(graphReady());
+  useEffect(() => {
+    loadGraph().then(() => setRoutingReady(true)).catch(() => setRoutingReady(false));
+  }, []);
   const live = geo.status === "on";
   const pos = live ? geo.pos : FALLBACK_POS;
   const day = now.day;
@@ -491,9 +595,16 @@ function App() {
 
   /* ----- Journey (trip in progress) ----- */
   if (journey && startStop && endStop) {
-    const { walk, trip } = planTrip(routeKey, selectedStops[0], selectedStops[1]);
+    const legs = routingReady ? tripLegs([{ route: routeKey, index: selectedStops[0] }, { route: routeKey, index: selectedStops[1] }], pos) : [];
+    const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
+    const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, startStop);
+    const trip = nextTrip(routeKey, selectedStops[0], selectedStops[1], day, now.minutes + walk);
     const walkDirect = walkMinutes(startStop, endStop) + walk;
     const wait = trip ? trip.depart.minutes - now.minutes : null;
+    const markers = [
+      { lat: startStop.lat, lon: startStop.lon, color: route.color, label: "1", name: `Board: ${startStop.name}` },
+      { lat: endStop.lat, lon: endStop.lon, color: route.color, label: "2", name: `Exit: ${endStop.name}` },
+    ];
     return html`<main class="phone-app journey-screen">
       <${ScreenHeader} eyebrow="Trip in progress" title="On the way." onBack=${() => setJourney(false)} backLabel="Return to trip planning" />
       <section class="arrival-banner">
@@ -504,8 +615,10 @@ function App() {
         </div>
         <time>${trip ? fromMinutes(trip.depart.minutes) : "—"}</time>
       </section>
-      <section class="journey-map">
-        <${RouteMap} routeKey=${routeKey} selectedStops=${selectedStops} compact=${true} pos=${pos} live=${live} />
+      <section class="journey-map street">
+        ${window.L
+          ? html`<${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${340} follow=${live} />`
+          : html`<${RouteMap} routeKey=${routeKey} selectedStops=${selectedStops} compact=${true} pos=${pos} live=${live} />`}
         <div class="journey-map-label"><span class=${`live-dot ${live ? "" : "off"}`}></span> ${live ? "Live location" : "Location off"}</div>
       </section>
       <section class="next-step-card">
@@ -513,10 +626,11 @@ function App() {
         <div>
           <span>First step</span>
           <h2>Walk to ${startStop.name}</h2>
-          <p>About a ${walk} minute walk from ${live ? "your location" : "campus"}${trip ? `. Scheduled departure ${fromMinutes(trip.depart.minutes)}${trip.depart.estimated ? " (estimated)" : ""}.` : "."}</p>
+          <p>${walkRoute ? `${fmtDistance(walkRoute.length)} along the streets, about ${walk} min` : `About a ${walk} minute walk`} from ${live ? "your location" : "campus"}${trip ? `. Scheduled departure ${fromMinutes(trip.depart.minutes)}${trip.depart.estimated ? " (estimated)" : ""}.` : "."}</p>
         </div>
         <strong>${walk} min</strong>
       </section>
+      ${walkRoute && html`<section class="directions-card"><h3>Walking directions</h3><${WalkSteps} walk=${walkRoute} /></section>`}
       <section class="travel-compare">
         <div class="compare-heading">
           <span>Best way there</span>
@@ -556,7 +670,15 @@ function App() {
     const pb = OVERVIEW_STOPS[b.route][b.index];
     const transfer = a.route !== b.route;
     const via = transferStop(a.route, b.route);
-    const walk = walkMinutes(pos, sa);
+    const legs = routingReady ? tripLegs(mapTrip, pos) : [];
+    const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
+    const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, sa);
+    const tIdx = transfer ? TRANSFERS[[a.route, b.route].sort().join("-")] : null;
+    const markers = [
+      { lat: sa.lat, lon: sa.lon, color: ra.color, label: "1", name: `Board: ${sa.name}` },
+      ...(transfer ? [{ lat: ra.stops[tIdx[a.route]].lat, lon: ra.stops[tIdx[a.route]].lon, color: "#102343", label: "⇄", name: `Transfer: ${via}` }] : []),
+      { lat: sb.lat, lon: sb.lon, color: rb.color, label: "2", name: `Exit: ${sb.name}` },
+    ];
     let leg1 = null;
     let leg2 = null;
     if (transfer) {
@@ -580,14 +702,16 @@ function App() {
         <div><small>Door to door</small><strong>${total !== null ? `${total} min` : "No service"}</strong></div>
         <div><small>Next shuttle</small><strong>${fmt(leg1?.depart)}</strong></div>
       </section>
-      <section class="trip-detail-map">
-        <div class="trip-detail-map-canvas">
-          <img src=${OVERVIEW_MAP} alt=${`Map from ${sa.name} to ${sb.name}`} />
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=${tripPath(pa, pb)} /></svg>
-          <span class="detail-map-point start" style=${{ left: `${pa.x}%`, top: `${pa.y}%`, background: ra.color }}>1</span>
-          <span class="detail-map-point end" style=${{ left: `${pb.x}%`, top: `${pb.y}%`, background: rb.color }}>2</span>
-        </div>
-      </section>
+      ${window.L
+        ? html`<section class="trip-detail-map street"><${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${360} /></section>`
+        : html`<section class="trip-detail-map">
+            <div class="trip-detail-map-canvas">
+              <img src=${OVERVIEW_MAP} alt=${`Map from ${sa.name} to ${sb.name}`} />
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=${tripPath(pa, pb)} /></svg>
+              <span class="detail-map-point start" style=${{ left: `${pa.x}%`, top: `${pa.y}%`, background: ra.color }}>1</span>
+              <span class="detail-map-point end" style=${{ left: `${pb.x}%`, top: `${pb.y}%`, background: rb.color }}>2</span>
+            </div>
+          </section>`}
       <section class="trip-overview-card">
         <span>Trip overview</span>
         <h2>${sa.name} <${Icon} name="arrow" size=${16} /> ${sb.name}</h2>
@@ -597,9 +721,10 @@ function App() {
         <div class="trip-step">
           <span class="step-node walk"><${Icon} name="pin" size=${16} /></span>
           <div>
-            <small>Walk · about ${walk} min</small>
+            <small>Walk · ${walkRoute ? `${fmtDistance(walkRoute.length)} · ` : ""}about ${walk} min</small>
             <h3>Walk to ${sa.name}</h3>
             <p>Your starting stop is marked as point 1 on the map.</p>
+            <${WalkSteps} walk=${walkRoute} />
           </div>
         </div>
         <div class="trip-step">
@@ -702,10 +827,12 @@ function App() {
         <div class="overview-map-canvas" style=${transformStyle(overview)}>
           <img src=${OVERVIEW_MAP} alt="Combined map showing the Gold, Silver, and Tungsten Ore Cart routes" />
           <${YouMarker} fitKey="overview" pos=${pos} live=${live} className="overview-user-location" label=${live ? "You" : "Campus"} />
-          ${mapTrip.length === 2 &&
-          html`<svg class="map-trip-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            <path d=${tripPath(OVERVIEW_STOPS[mapTrip[0].route][mapTrip[0].index], OVERVIEW_STOPS[mapTrip[1].route][mapTrip[1].index])} />
-          </svg>`}
+          ${routingReady && mapTrip.length
+            ? html`<${ArtworkLegs} fitKey="overview" legs=${tripLegs(mapTrip, pos)} />`
+            : mapTrip.length === 2 &&
+              html`<svg class="map-trip-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <path d=${tripPath(OVERVIEW_STOPS[mapTrip[0].route][mapTrip[0].index], OVERVIEW_STOPS[mapTrip[1].route][mapTrip[1].index])} />
+              </svg>`}
           ${ROUTE_KEYS.flatMap((key) =>
             OVERVIEW_STOPS[key].map((p, i) => {
               const r = ROUTES[key];
@@ -846,7 +973,7 @@ function App() {
   /* ----- Home ----- */
   return html`<main class="phone-app home-screen">
     <section class="home-map-hero">
-      <${HomeMap} selectedStops=${mapTrip} onSelectStop=${pickMapStop} pos=${pos} live=${live} />
+      <${HomeMap} selectedStops=${mapTrip} onSelectStop=${pickMapStop} pos=${pos} live=${live} legs=${routingReady ? tripLegs(mapTrip, pos) : []} />
       <div class="home-brand">
         <span><img src=${LOGO} alt="" /></span>
         <div><strong>OreTransit</strong><small>GOLDEN, CO</small></div>

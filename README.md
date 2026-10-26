@@ -39,6 +39,9 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
 | `app.js` | All screens: Home, Explore every stop, Explore route, Trip detail, Journey, Schedule sheet |
 | `data.js` | Routes, stops (with lat/lon), map georeference, recommended places |
 | `schedule.js` | Official weekday/weekend timetables and next-trip helpers |
+| `routing.js` | Street routing (walking directions, shuttle paths) over `graph.json` |
+| `graph.json` | OpenStreetMap road/path network for Golden (rebuild with the Overpass query in the commit history) |
+| `vendor/leaflet/` | Leaflet 1.9.4 for the street map |
 | `styles.css` | Styles (ported from the Figma Make mockup) |
 | `sw.js` | Offline cache |
 | `manifest.webmanifest` | Install metadata and icons |
@@ -58,6 +61,12 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
   (weekday and weekend), transcribed from https://orecart.mines.edu/ and hash-verified against the
   live pages. Stops with "no set time" are interpolated and shown with a `~`. Trip planning,
   transfers and the "next shuttle" badges all use these times in the America/Denver time zone.
+- **Street directions**: `routing.js` runs Dijkstra on a bundled OpenStreetMap graph of Golden
+  (`graph.json`, 32 k nodes: streets, sidewalks, campus paths, trails). It produces the walking
+  route from your position to the boarding stop with turn-by-turn steps, and the shuttle's path
+  along its streets between stops (one-way streets respected). Trip detail and journey screens show
+  these on a real street map (Leaflet + OpenStreetMap tiles); the Home and Explore artwork maps draw
+  the same paths on top of the official map art.
 - Geolocation only works on HTTPS (or localhost), so host the app before testing GPS on a phone.
 
 ## Known limitations
@@ -65,4 +74,8 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
 - The Ore Cart is not live-tracked, so times are scheduled, not real-time arrivals.
 - Five recommended places (Windy Saddle, Beaver Brook, Tony Grampsas Park, North Table Mountain
   trailheads) lie outside the drawn map and are flagged `offMap` so they are not plotted.
+- Map tiles come from tile.openstreetmap.org, which is fine for a small user base; for wider use
+  switch the tile URL in `app.js` to a provider such as MapTiler, Stadia or Thunderforest.
+- Shuttle paths are the shortest street route between consecutive stops, which matches the
+  published route in Golden's grid but is not an official trace.
 - Update `schedule.js` when Mines publishes a new timetable.

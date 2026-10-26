@@ -1,7 +1,7 @@
 // Offline cache for OreTransit.
 // Code files are network-first (so updates arrive as soon as you're online);
 // maps, icons and fonts are cache-first (big and rarely change).
-const CACHE = "oretransit-v6";
+const CACHE = "oretransit-v7";
 const PRECACHE = [
   "./",
   "./index.html",
@@ -9,6 +9,13 @@ const PRECACHE = [
   "./app.js",
   "./data.js",
   "./schedule.js",
+  "./routing.js",
+  "./graph.json",
+  "./vendor/leaflet/leaflet.js",
+  "./vendor/leaflet/leaflet.css",
+  "./vendor/leaflet/images/marker-icon.png",
+  "./vendor/leaflet/images/marker-icon-2x.png",
+  "./vendor/leaflet/images/marker-shadow.png",
   "./manifest.webmanifest",
   "./vendor/preact-standalone.module.js",
   "./fonts/fonts.css",
@@ -73,4 +80,5 @@ self.addEventListener("fetch", (event) => {
   if (url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com")) {
     event.respondWith(cacheFirst(request));
   }
+  // OpenStreetMap tiles: straight from the network (tile usage policy forbids bulk caching).
 });
