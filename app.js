@@ -729,7 +729,7 @@ function App() {
             }),
           )}
           ${PLACES.map(
-            (place, i) => html`<button
+            (place, i) => place.offMap ? null : html`<button
               key=${place.name}
               type="button"
               class=${`recommended-spot-marker ${focusPlace === i ? "selected" : ""} ${routeFocus !== "all" && routeFocus !== place.route ? "dimmed" : ""}`}

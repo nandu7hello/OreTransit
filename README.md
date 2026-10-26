@@ -48,9 +48,12 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
 ## Live location and real times
 
 - **GPS**: the app watches the phone's location (browser Geolocation API) and places "You" on each
-  map. Every map image is georeferenced with an affine fit (`MAP_FIT` in `data.js`, about 4 % RMS
-  against the stop positions). Walking times are straight-line distance × 1.3 at 80 m/min. When
-  location is off or blocked, the app assumes Kafadar Commons and says so.
+  map. Every map image is georeferenced (`MAP_FIT` in `data.js`) by aligning the OpenStreetMap road
+  network to the streets drawn on the image; 87-88 % of road samples land within 2 px. Stop
+  coordinates are derived from the official cart icons through that georeference, and the
+  recommended places are geocoded (Nominatim) and drawn at their real positions. Walking times are
+  straight-line distance × 1.3 at 80 m/min. When location is off or blocked, the app assumes
+  Kafadar Commons and says so.
 - **Timetables**: `schedule.js` holds the official time-point schedules for all three routes
   (weekday and weekend), transcribed from https://orecart.mines.edu/ and hash-verified against the
   live pages. Stops with "no set time" are interpolated and shown with a `~`. Trip planning,
@@ -60,7 +63,6 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
 ## Known limitations
 
 - The Ore Cart is not live-tracked, so times are scheduled, not real-time arrivals.
-- Stop coordinates come from OpenStreetMap; a few (Survey Field, The Quarry, Lookout Apartments,
-  Ruby Drive, the two Miners Alley stops) are placed from the official route maps and may be off
-  by half a block. Edit `lat`/`lon` in `data.js` and re-run the fit if you have better data.
+- Five recommended places (Windy Saddle, Beaver Brook, Tony Grampsas Park, North Table Mountain
+  trailheads) lie outside the drawn map and are flagged `offMap` so they are not plotted.
 - Update `schedule.js` when Mines publishes a new timetable.
