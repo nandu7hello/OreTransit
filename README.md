@@ -71,6 +71,10 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
   fastest way there from your position: it compares walking all the way against walking to every
   stop on every route and riding (with a transfer when needed), using the real timetable, and shows
   the best option plus the alternative.
+- **Pick two stops**: the Home planner can switch from "From my location" to "Pick two stops"
+  (start and destination), and plans between them the same way. On Explore, tapping a place shows
+  its closest stop and offers directions from you (or from a chosen start); the trip then ends with
+  the walk from the stop to the place.
 - **Walking difficulty**: `graph.json` carries terrain elevation (Open-Meteo, 90 m DEM) for every
   node. Each walk gets a climb total and steepest grade, rated Easy / Moderate / Hard, and walking
   times add one minute per 10 m of climb (Naismith's rule).

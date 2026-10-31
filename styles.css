@@ -595,3 +595,29 @@ h1{letter-spacing:-.7px;margin:0;font-family:DM Serif Display,serif;font-size:31
 .plan-go.secondary{background:#ece7da;color:#102343}
 .diff-chip{display:inline-block;margin-left:auto;background:var(--c);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
 .dir-steps p .diff-chip{margin-left:6px;vertical-align:middle}
+
+/* ---- Markers keep a constant on-screen size while the artwork maps are zoomed; smaller Explore markers ---- */
+.home-overview-canvas .home-stop-marker{transform:translate(-50%,-50%) scale(var(--inv,1))}
+.home-overview-canvas .home-stop-marker.selected{transform:translate(-50%,-50%) scale(calc(var(--inv,1)*1.2))}
+.map-canvas .stop-marker{transform:translate(-50%,-50%) scale(var(--inv,1))}
+.map-canvas .stop-marker.selected{transform:translate(-50%,-50%) scale(calc(var(--inv,1)*1.15))}
+.overview-map-canvas .overview-stop-marker{width:12px;height:12px;transform:translate(-50%,-50%) scale(var(--inv,1))}
+.overview-map-canvas .overview-stop-marker.selected{transform:translate(-50%,-50%) scale(calc(var(--inv,1)*1.25))}
+.overview-map-canvas .recommended-spot-marker{width:15px;height:15px;border-radius:5px;border-width:1.5px;transform:translate(-50%,-50%) scale(var(--inv,1));z-index:4}
+.overview-map-canvas .recommended-spot-marker svg{width:8px;height:8px}
+.overview-map-canvas .recommended-spot-marker.selected{transform:translate(-50%,-50%) scale(calc(var(--inv,1)*1.3));z-index:6}
+.overview-map-canvas .recommended-spot-marker:before{inset:-5px}
+.overview-map-canvas .overview-stop-marker>span,.overview-map-canvas .recommended-spot-marker>span{font-size:7px}
+.home-overview-canvas .home-location,.overview-map-canvas .overview-user-location,.map-canvas .user-location{transform:translate(-50%,-50%) scale(var(--inv,1))}
+
+/* ---- Two-stop mode + place actions ---- */
+.plan-mode{margin:10px 0 4px;width:100%}
+.plan-mode button{flex:1;padding:7px 8px}
+.plan-two{display:grid;gap:8px;margin-top:8px}
+.plan-two label{display:flex;align-items:center;gap:8px}
+.plan-two label .dir-dot{flex:none}
+.plan-two .plan-select{flex:1;min-width:0}
+.spot-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.spot-go{display:inline-flex;align-items:center;gap:6px;background:#102343;color:#f2c94c;border:0;border-radius:10px;padding:8px 12px;font:700 12px DM Sans,sans-serif;cursor:pointer}
+.spot-go.secondary{background:#ece7da;color:#102343}
+.recommended-spot-detail strong{display:block;margin-top:6px}
