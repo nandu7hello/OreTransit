@@ -501,6 +501,101 @@ function LocationNote({ geo, className }) {
     </div>`}`;
 }
 
+/* ---------- Directions (Google Maps style) ---------- */
+
+function stopsBetween(routeKey, from, to) {
+  const n = ROUTES[routeKey].stops.length;
+  return ((to - from) % n + n) % n;
+}
+
+function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liveMode }) {
+  const [a, b] = trip;
+  const ra = ROUTES[a.route], rb = ROUTES[b.route];
+  const sa = ra.stops[a.index], sb = rb.stops[b.index];
+  const transfer = a.route !== b.route;
+  const tIdx = transfer ? TRANSFERS[[a.route, b.route].sort().join("-")] : null;
+  const legs = routingReady ? tripLegs(trip, pos) : [];
+  const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
+  const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, sa);
+
+  let leg1 = null, leg2 = null;
+  if (transfer) {
+    leg1 = nextTrip(a.route, a.index, tIdx[a.route], day, now.minutes + walk);
+    leg2 = leg1 ? nextTrip(b.route, tIdx[b.route], b.index, day, leg1.arrive.minutes + 1) : null;
+  } else {
+    leg1 = nextTrip(a.route, a.index, b.index, day, now.minutes + walk);
+  }
+  const arrive = transfer ? leg2?.arrive : leg1?.arrive;
+  const leaveAt = leg1 ? leg1.depart.minutes - walk : now.minutes;
+  const total = arrive ? arrive.minutes - leaveAt : null;
+  const T = (t) => (t ? fromMinutes(t.minutes) : "—");
+  const markers = [
+    { lat: sa.lat, lon: sa.lon, color: ra.color, label: "", name: sa.name },
+    ...(transfer ? [{ lat: ra.stops[tIdx[a.route]].lat, lon: ra.stops[tIdx[a.route]].lon, color: "#102343", label: "", name: ra.stops[tIdx[a.route]].name }] : []),
+    { lat: sb.lat, lon: sb.lon, color: rb.color, label: "", name: sb.name },
+  ];
+  const chip = (r) => html`<span class="dir-chip" style=${{ background: r.color }}>${r.shortName}</span>`;
+
+  return html`<main class="phone-app dir-screen">
+    <header class="dir-header">
+      <button type="button" class="icon-button" onClick=${onBack} aria-label="Back"><${Icon} name="back" /></button>
+      <div class="dir-endpoints">
+        <span><i class="dir-dot from"></i>${live ? "Your location" : "Campus"}</span>
+        <span><i class="dir-dot to"></i>${sb.name}</span>
+      </div>
+    </header>
+    <section class="dir-map">
+      ${window.L
+        ? html`<${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${Math.round(Math.min(420, window.innerHeight * 0.42))} follow=${liveMode && live} />`
+        : html`<${RouteMap} routeKey=${a.route} selectedStops=${transfer ? [a.index] : [a.index, b.index]} compact=${true} pos=${pos} live=${live} />`}
+    </section>
+    <section class="dir-summary">
+      <strong>${total !== null ? `${total} min` : "No more trips today"}</strong>
+      <span>${leg1 ? `${fromMinutes(leaveAt)} – ${T(arrive)}` : `Service ${day === "weekday" ? SERVICE_HOURS.weekday : SERVICE_HOURS.weekend}`}</span>
+    </section>
+    <ol class="dir-steps">
+      <li class="walk">
+        <time>${fromMinutes(leaveAt)}</time>
+        <span class="dir-node"><${Icon} name="walk" size=${16} /></span>
+        <div>
+          <p>Walk · ${walk} min${walkRoute ? ` · ${fmtDistance(walkRoute.length)}` : ""}</p>
+          ${walkRoute && html`<details><summary>Details</summary><${WalkSteps} walk=${walkRoute} /></details>`}
+        </div>
+      </li>
+      <li>
+        <time>${T(leg1?.depart)}</time>
+        <span class="dir-node stop" style=${{ borderColor: ra.color }}></span>
+        <div>
+          <p><b>${sa.name}</b></p>
+          <p class="dir-ride">${chip(ra)} Ride ${stopsBetween(a.route, a.index, transfer ? tIdx[a.route] : b.index)} stops · ${leg1 ? `${leg1.ride} min` : "—"}</p>
+        </div>
+      </li>
+      ${transfer &&
+      html`<li>
+        <time>${T(leg1?.arrive)}</time>
+        <span class="dir-node stop" style=${{ borderColor: ra.color }}></span>
+        <div>
+          <p><b>${ra.stops[tIdx[a.route]].name}</b></p>
+          <p class="dir-ride muted">Transfer · wait ${leg1 && leg2 ? leg2.depart.minutes - leg1.arrive.minutes : "—"} min</p>
+        </div>
+      </li>
+      <li>
+        <time>${T(leg2?.depart)}</time>
+        <span class="dir-node stop" style=${{ borderColor: rb.color }}></span>
+        <div>
+          <p><b>${rb.stops[tIdx[b.route]].name}</b></p>
+          <p class="dir-ride">${chip(rb)} Ride ${stopsBetween(b.route, tIdx[b.route], b.index)} stops · ${leg2 ? `${leg2.ride} min` : "—"}</p>
+        </div>
+      </li>`}
+      <li class="end">
+        <time>${T(arrive)}</time>
+        <span class="dir-node stop end" style=${{ borderColor: rb.color }}></span>
+        <div><p><b>${sb.name}</b></p></div>
+      </li>
+    </ol>
+  </main>`;
+}
+
 /* ---------- App ---------- */
 
 function App() {
@@ -593,177 +688,16 @@ function App() {
     return { walk, trip };
   }
 
-  /* ----- Journey (trip in progress) ----- */
+  /* ----- Directions (journey from the route explorer, or a map trip) ----- */
   if (journey && startStop && endStop) {
-    const legs = routingReady ? tripLegs([{ route: routeKey, index: selectedStops[0] }, { route: routeKey, index: selectedStops[1] }], pos) : [];
-    const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
-    const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, startStop);
-    const trip = nextTrip(routeKey, selectedStops[0], selectedStops[1], day, now.minutes + walk);
-    const walkDirect = walkMinutes(startStop, endStop) + walk;
-    const wait = trip ? trip.depart.minutes - now.minutes : null;
-    const markers = [
-      { lat: startStop.lat, lon: startStop.lon, color: route.color, label: "1", name: `Board: ${startStop.name}` },
-      { lat: endStop.lat, lon: endStop.lon, color: route.color, label: "2", name: `Exit: ${endStop.name}` },
-    ];
-    return html`<main class="phone-app journey-screen">
-      <${ScreenHeader} eyebrow="Trip in progress" title="On the way." onBack=${() => setJourney(false)} backLabel="Return to trip planning" />
-      <section class="arrival-banner">
-        <div class="arrival-icon" style=${{ background: route.color }}>${route.shortName.charAt(0)}</div>
-        <div>
-          <span>${route.name}</span>
-          <strong>${trip ? `Shuttle leaves in ${minutesLabel(trip.depart.minutes, now.minutes)}` : "No more departures today"}</strong>
-        </div>
-        <time>${trip ? fromMinutes(trip.depart.minutes) : "—"}</time>
-      </section>
-      <section class="journey-map street">
-        ${window.L
-          ? html`<${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${340} follow=${live} />`
-          : html`<${RouteMap} routeKey=${routeKey} selectedStops=${selectedStops} compact=${true} pos=${pos} live=${live} />`}
-        <div class="journey-map-label"><span class=${`live-dot ${live ? "" : "off"}`}></span> ${live ? "Live location" : "Location off"}</div>
-      </section>
-      <section class="next-step-card">
-        <div class="step-symbol"><${Icon} name="pin" size=${22} /></div>
-        <div>
-          <span>First step</span>
-          <h2>Walk to ${startStop.name}</h2>
-          <p>${walkRoute ? `${fmtDistance(walkRoute.length)} along the streets, about ${walk} min` : `About a ${walk} minute walk`} from ${live ? "your location" : "campus"}${trip ? `. Scheduled departure ${fromMinutes(trip.depart.minutes)}${trip.depart.estimated ? " (estimated)" : ""}.` : "."}</p>
-        </div>
-        <strong>${walk} min</strong>
-      </section>
-      ${walkRoute && html`<section class="directions-card"><h3>Walking directions</h3><${WalkSteps} walk=${walkRoute} /></section>`}
-      <section class="travel-compare">
-        <div class="compare-heading">
-          <span>Best way there</span>
-          <p>${startStop.name} → ${endStop.name}</p>
-        </div>
-        <div class="compare-options">
-          <div class=${trip && walk + wait + trip.ride <= walkDirect ? "recommended" : ""}>
-            <span><${Icon} name="routes" size=${19} /> Ore Cart</span>
-            <strong>${trip ? `${walk + wait + trip.ride} min` : "—"}</strong>
-            <small>${trip ? `${walk} min walk · ${wait} min wait · ${trip.ride} min ride` : "Service has ended for today"}</small>
-            ${trip && walk + wait + trip.ride <= walkDirect && html`<b>Fastest</b>`}
-          </div>
-          <div class=${!trip || walk + wait + trip.ride > walkDirect ? "recommended" : ""}>
-            <span><${Icon} name="pin" size=${19} /> Walk</span>
-            <strong>${walkDirect} min</strong>
-            <small>About ${((distanceMeters(pos, startStop) + distanceMeters(startStop, endStop)) / 1609).toFixed(1)} miles</small>
-            ${(!trip || walk + wait + trip.ride > walkDirect) && html`<b>Fastest</b>`}
-          </div>
-        </div>
-      </section>
-      <section class="journey-stops">
-        <div><span class="timeline-dot active"></span><p><small>Board at ${trip ? fromMinutes(trip.depart.minutes) : ""}</small><strong>${startStop.name}</strong></p></div>
-        <div><span class="timeline-dot"></span><p><small>Exit at ${trip ? fromMinutes(trip.arrive.minutes) : ""}</small><strong>${endStop.name}</strong></p></div>
-      </section>
-      <button type="button" class="end-trip-button" onClick=${() => setJourney(false)}>Back to route planner</button>
-    </main>`;
+    return html`<${DirectionsScreen}
+      trip=${[{ route: routeKey, index: selectedStops[0] }, { route: routeKey, index: selectedStops[1] }]}
+      pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} liveMode=${true}
+      onBack=${() => setJourney(false)}
+    />`;
   }
-
-  /* ----- Map trip detail ----- */
   if (mapTripDetail && mapTrip.length === 2) {
-    const [a, b] = mapTrip;
-    const ra = ROUTES[a.route];
-    const rb = ROUTES[b.route];
-    const sa = ra.stops[a.index];
-    const sb = rb.stops[b.index];
-    const pa = OVERVIEW_STOPS[a.route][a.index];
-    const pb = OVERVIEW_STOPS[b.route][b.index];
-    const transfer = a.route !== b.route;
-    const via = transferStop(a.route, b.route);
-    const legs = routingReady ? tripLegs(mapTrip, pos) : [];
-    const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
-    const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, sa);
-    const tIdx = transfer ? TRANSFERS[[a.route, b.route].sort().join("-")] : null;
-    const markers = [
-      { lat: sa.lat, lon: sa.lon, color: ra.color, label: "1", name: `Board: ${sa.name}` },
-      ...(transfer ? [{ lat: ra.stops[tIdx[a.route]].lat, lon: ra.stops[tIdx[a.route]].lon, color: "#102343", label: "⇄", name: `Transfer: ${via}` }] : []),
-      { lat: sb.lat, lon: sb.lon, color: rb.color, label: "2", name: `Exit: ${sb.name}` },
-    ];
-    let leg1 = null;
-    let leg2 = null;
-    if (transfer) {
-      const t = TRANSFERS[[a.route, b.route].sort().join("-")];
-      leg1 = nextTrip(a.route, a.index, t[a.route], day, now.minutes + walk);
-      leg2 = leg1 ? nextTrip(b.route, t[b.route], b.index, day, leg1.arrive.minutes + 1) : null;
-    } else {
-      leg1 = nextTrip(a.route, a.index, b.index, day, now.minutes + walk);
-    }
-    const arrival = transfer ? leg2?.arrive : leg1?.arrive;
-    const total = arrival ? arrival.minutes - now.minutes : null;
-    const fmt = (t) => (t ? `${fromMinutes(t.minutes)}${t.estimated ? "~" : ""}` : "—");
-
-    return html`<main class="phone-app map-trip-detail-screen">
-      <${ScreenHeader} eyebrow="Your map trip" title=${transfer ? "One simple transfer." : "A direct ride."} onBack=${() => setMapTripDetail(false)} backLabel="Return to map" />
-      <section class="detail-route-banner">
-        <div class="detail-route-badges">
-          <span style=${{ background: ra.color }}>${ra.shortName.charAt(0)}</span>
-          ${transfer && html`<${Icon} name="arrow" size=${15} /><span style=${{ background: rb.color }}>${rb.shortName.charAt(0)}</span>`}
-        </div>
-        <div><small>Door to door</small><strong>${total !== null ? `${total} min` : "No service"}</strong></div>
-        <div><small>Next shuttle</small><strong>${fmt(leg1?.depart)}</strong></div>
-      </section>
-      ${window.L
-        ? html`<section class="trip-detail-map street"><${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${360} /></section>`
-        : html`<section class="trip-detail-map">
-            <div class="trip-detail-map-canvas">
-              <img src=${OVERVIEW_MAP} alt=${`Map from ${sa.name} to ${sb.name}`} />
-              <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=${tripPath(pa, pb)} /></svg>
-              <span class="detail-map-point start" style=${{ left: `${pa.x}%`, top: `${pa.y}%`, background: ra.color }}>1</span>
-              <span class="detail-map-point end" style=${{ left: `${pb.x}%`, top: `${pb.y}%`, background: rb.color }}>2</span>
-            </div>
-          </section>`}
-      <section class="trip-overview-card">
-        <span>Trip overview</span>
-        <h2>${sa.name} <${Icon} name="arrow" size=${16} /> ${sb.name}</h2>
-        <p>${transfer ? `${ra.name} to ${rb.name}` : ra.name}${arrival ? ` · arrive ${fmt(arrival)}` : " · no more trips today"}</p>
-      </section>
-      <section class="trip-steps">
-        <div class="trip-step">
-          <span class="step-node walk"><${Icon} name="pin" size=${16} /></span>
-          <div>
-            <small>Walk · ${walkRoute ? `${fmtDistance(walkRoute.length)} · ` : ""}about ${walk} min</small>
-            <h3>Walk to ${sa.name}</h3>
-            <p>Your starting stop is marked as point 1 on the map.</p>
-            <${WalkSteps} walk=${walkRoute} />
-          </div>
-        </div>
-        <div class="trip-step">
-          <span class="step-node" style=${{ background: ra.color }}>${ra.shortName.charAt(0)}</span>
-          <div>
-            <small>${leg1 ? `Board at ${fmt(leg1.depart)} · ${leg1.ride} min ride` : "No departure left today"}</small>
-            <h3>Take the ${ra.name}</h3>
-            <p>Board at ${sa.name}${transfer ? ` and ride toward ${via}.` : ` and remain on board until ${sb.name}.`}</p>
-          </div>
-        </div>
-        ${transfer &&
-        html`<div class="trip-step transfer">
-            <span class="step-node transfer-node"><${Icon} name="routes" size=${16} /></span>
-            <div>
-              <small>${leg1 && leg2 ? `Arrive ${fmt(leg1.arrive)} · wait ${leg2.depart.minutes - leg1.arrive.minutes} min` : "Transfer"}</small>
-              <h3>Change at ${via}</h3>
-              <p>Exit the ${ra.shortName} Route and wait for the ${rb.shortName} Route at the same stop.</p>
-            </div>
-          </div>
-          <div class="trip-step">
-            <span class="step-node" style=${{ background: rb.color }}>${rb.shortName.charAt(0)}</span>
-            <div>
-              <small>${leg2 ? `Board at ${fmt(leg2.depart)} · ${leg2.ride} min ride` : "No connection left today"}</small>
-              <h3>Board the ${rb.name}</h3>
-              <p>Stay on until ${sb.name}. The driver announces each stop.</p>
-            </div>
-          </div>`}
-        <div class="trip-step final">
-          <span class="step-node final-node"><${Icon} name="pin" size=${16} /></span>
-          <div>
-            <small>${arrival ? `Arrive ${fmt(arrival)}` : "Arrive"}</small>
-            <h3>Exit at ${sb.name}</h3>
-            <p>Your destination is marked as point 2 on the map.</p>
-          </div>
-        </div>
-      </section>
-      <p class="schedule-note"><${Icon} name="info" size=${14} /> Times come from the published Ore Cart timetable, not live tracking. A ~ marks a stop without a posted time.</p>
-      <button type="button" class="start-map-trip" onClick=${() => setMapTripDetail(false)}>Back to map <${Icon} name="map" size=${17} /></button>
-    </main>`;
+    return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} liveMode=${true} onBack=${() => setMapTripDetail(false)} />`;
   }
 
   /* ----- Explore one route ----- */

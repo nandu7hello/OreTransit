@@ -501,3 +501,35 @@ h1{letter-spacing:-.7px;margin:0;font-family:DM Serif Display,serif;font-size:31
 .walk-steps small{flex:none;color:#75787d;font-size:12px;font-variant-numeric:tabular-nums}
 .directions-card{background:#fffdf7;border:1px solid #1023431a;border-radius:18px;padding:14px 18px 10px;margin:0 0 16px}
 .directions-card h3{margin:0 0 4px;font:700 14px/1.3 DM Sans,sans-serif;color:#102343}
+
+/* ---- Directions screen (Google Maps style) ---- */
+.dir-screen{padding:0 0 40px;background:#fff}
+.dir-header{display:grid;grid-template-columns:42px 1fr;align-items:center;gap:10px;padding:10px 14px 10px 10px;position:sticky;top:0;background:#fff;z-index:5;border-bottom:1px solid #1023431a}
+.dir-endpoints{display:grid;gap:4px;font-size:14px;color:#102343;font-weight:600;min-width:0}
+.dir-endpoints span{display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dir-dot{width:9px;height:9px;border-radius:50%;background:#2f6fed;flex:none;box-shadow:0 0 0 2px #2f6fed33}
+.dir-dot.to{background:#d93025;box-shadow:0 0 0 2px #d9302533;border-radius:2px}
+.dir-map .street-map{border-radius:0;border:0;box-shadow:none}
+.dir-map .interactive-map{height:300px}
+.dir-summary{display:flex;align-items:baseline;gap:12px;padding:14px 18px 6px;border-bottom:1px solid #1023431a}
+.dir-summary strong{font:700 24px/1 DM Sans,sans-serif;color:#102343}
+.dir-summary span{font-size:14px;color:#5b6475}
+.dir-steps{list-style:none;margin:0;padding:8px 18px 0 14px}
+.dir-steps li{display:grid;grid-template-columns:62px 22px 1fr;gap:8px;align-items:start;position:relative;padding:10px 0 14px}
+.dir-steps li:not(:last-child):before{content:"";position:absolute;left:80px;top:28px;bottom:-4px;border-left:3px dotted #c9ccd3}
+.dir-steps li:not(.walk):not(:last-child):before{border-left:3px solid #c9ccd3}
+.dir-steps time{font-size:13px;color:#5b6475;font-variant-numeric:tabular-nums;padding-top:3px}
+.dir-node{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:#eef1f5;color:#102343;position:relative;z-index:1}
+.dir-node.stop{width:16px;height:16px;margin:3px;background:#fff;border:3px solid #102343}
+.dir-node.stop.end{background:#102343}
+.dir-steps p{margin:0;font-size:14px;color:#102343;line-height:1.35}
+.dir-steps p b{font-weight:700}
+.dir-ride{margin-top:4px!important;display:flex;align-items:center;gap:6px;color:#3c4452}
+.dir-ride.muted{color:#75787d}
+.dir-chip{color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;letter-spacing:.2px}
+.dir-steps details{margin-top:4px}
+.dir-steps summary{font-size:13px;color:#2f6fed;cursor:pointer;list-style:none}
+.dir-steps summary::-webkit-details-marker{display:none}
+.dir-steps .walk-steps{margin-top:6px;border-left:0}
+.dir-steps .walk-steps li{display:flex;grid-template-columns:none;padding:4px 0;font-size:13px}
+.dir-steps .walk-steps li:before{display:none}
