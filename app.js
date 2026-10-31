@@ -18,7 +18,7 @@ import {
   fromMinutes,
   nowInGolden,
 } from "./schedule.js";
-import { loadGraph, graphReady, walkTo, rideCoords, shuttlePath, fmtDistance } from "./routing.js";
+import { loadGraph, graphReady, walkTo, rideCoords, shuttlePath, fmtDistance, walkField, fieldDistanceTo, walkMinutesFor } from "./routing.js";
 
 const LOGO = "assets/ore-cart-logo.png";
 const OVERVIEW_MAP = "assets/all-routes-map.png";
@@ -561,10 +561,11 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); lock?.release?.().catch(() => {}); };
   }, [nav]);
-  const [a, b] = trip;
+  const walkOnly = trip.length === 1;
+  const a = trip[0], b = walkOnly ? trip[0] : trip[1];
   const ra = ROUTES[a.route], rb = ROUTES[b.route];
   const sa = ra.stops[a.index], sb = rb.stops[b.index];
-  const transfer = a.route !== b.route;
+  const transfer = !walkOnly && a.route !== b.route;
   const tIdx = transfer ? TRANSFERS[[a.route, b.route].sort().join("-")] : null;
   // Recompute the street route only when the position moved more than ~8 m (cheap on phones).
   let legs = [];
@@ -580,31 +581,42 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
   const fixAge = geo?.at ? Math.round((Date.now() - geo.at) / 1000) : null;
 
   let leg1 = null, leg2 = null;
-  if (transfer) {
+  if (walkOnly) {
+    // no shuttle: the arrival is simply the end of the walk
+  } else if (transfer) {
     leg1 = nextTrip(a.route, a.index, tIdx[a.route], day, now.minutes + walk);
     leg2 = leg1 ? nextTrip(b.route, tIdx[b.route], b.index, day, leg1.arrive.minutes + 1) : null;
   } else {
     leg1 = nextTrip(a.route, a.index, b.index, day, now.minutes + walk);
   }
-  const arrive = transfer ? leg2?.arrive : leg1?.arrive;
+  const arrive = walkOnly ? { minutes: now.minutes + walk } : transfer ? leg2?.arrive : leg1?.arrive;
   const leaveAt = leg1 ? leg1.depart.minutes - walk : now.minutes;
   const total = arrive ? arrive.minutes - leaveAt : null;
   const T = (t) => (t ? fromMinutes(t.minutes) : "—");
   const walkDirect = walkMinutes(pos, sa) + walkMinutes(sa, sb);
   const viaStop = transfer ? ra.stops[tIdx[a.route]] : null;
 
-  const markers = [
-    { lat: sa.lat, lon: sa.lon, color: ra.color, label: "", name: sa.name },
-    ...(transfer ? [{ lat: viaStop.lat, lon: viaStop.lon, color: "#102343", label: "", name: viaStop.name }] : []),
-    { lat: sb.lat, lon: sb.lon, color: rb.color, label: "", name: sb.name },
-  ];
+  const markers = walkOnly
+    ? [{ lat: sb.lat, lon: sb.lon, color: rb.color, label: "", name: sb.name }]
+    : [
+        { lat: sa.lat, lon: sa.lon, color: ra.color, label: "", name: sa.name },
+        ...(transfer ? [{ lat: viaStop.lat, lon: viaStop.lon, color: "#102343", label: "", name: viaStop.name }] : []),
+        { lat: sb.lat, lon: sb.lon, color: rb.color, label: "", name: sb.name },
+      ];
   const chip = (r) => html`<span class="dir-chip" style=${{ background: r.color }}>${r.shortName}</span>`;
 
   // ---- live navigation state ----
   let banner = null;
   if (nav) {
     const distToStop = distanceMeters(pos, sa);
-    if (!leg1) banner = { title: "No more shuttles today", sub: "Service has ended on this route." };
+    if (walkOnly && distToStop <= 30) banner = { title: "You have arrived", sub: sb.name };
+    else if (walkOnly && walkRoute && walkRoute.steps.length) {
+      const steps = walkRoute.steps.filter((st) => st.coords.length > 1);
+      let cur = steps[0], curRemain = cur ? alongPolyline(pos, cur.coords).remain : 0, bestD = Infinity;
+      for (const st of steps) { const r = alongPolyline(pos, st.coords); if (r.d < bestD) { bestD = r.d; cur = st; curRemain = r.remain; } }
+      banner = { title: cur ? cur.text : `Walk to ${sb.name}`, sub: `${fmtDistance(curRemain)} · then ${fmtDistance(Math.max(0, walkRoute.length - curRemain))} more · arrive ${T(arrive)}` };
+    } else if (walkOnly) banner = { title: `Walk to ${sb.name}`, sub: `About ${walk} min` };
+    else if (!leg1) banner = { title: "No more shuttles today", sub: "Service has ended on this route." };
     else if (now.minutes >= leg1.depart.minutes && distToStop > 60 && now.minutes < (arrive?.minutes ?? Infinity)) {
       banner = { title: `Ride the ${ra.name}`, sub: transfer ? `Exit at ${viaStop.name} · ${T(leg1.arrive)}` : `Exit at ${sb.name} · ${T(leg1.arrive)}` };
     } else if (distToStop <= 40) {
@@ -641,7 +653,7 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
     <section class="dir-summary">
       <div>
         <strong>${total !== null ? `${total} min` : "No more trips today"}</strong>
-        <span>${leg1 ? `${fromMinutes(leaveAt)} – ${T(arrive)}` : `Service ${day === "weekday" ? SERVICE_HOURS.weekday : SERVICE_HOURS.weekend}`}</span>
+        <span>${leg1 || walkOnly ? `${fromMinutes(leaveAt)} – ${T(arrive)}` : `Service ${day === "weekday" ? SERVICE_HOURS.weekday : SERVICE_HOURS.weekend}`}</span>
       </div>
       <div class="dir-toggle" role="tablist" aria-label="Level of detail">
         <button type="button" role="tab" aria-selected=${!detail} class=${detail ? "" : "active"} onClick=${() => setDetail(false)}>Simple</button>
@@ -650,21 +662,22 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
     </section>
     ${detail &&
     html`<section class="dir-facts">
-      <div><small>Walk to stop</small><strong>${walk} min</strong><span>${walkRoute ? fmtDistance(walkRoute.length) : "straight line"}</span></div>
-      <div><small>Wait</small><strong>${leg1 ? Math.max(0, leg1.depart.minutes - now.minutes - walk) : "—"} min</strong><span>at ${sa.name}</span></div>
+      <div><small>${walkOnly ? "Walk" : "Walk to stop"}</small><strong>${walk} min</strong><span>${walkRoute ? fmtDistance(walkRoute.length) : "straight line"}</span></div>
+      <div><small>Difficulty</small><strong>${walkRoute?.difficulty?.level ?? "—"}</strong><span>${walkRoute ? `${walkRoute.difficulty.note}${walkRoute.ascent ? ` · ↑${walkRoute.ascent} m ↓${walkRoute.descent} m` : ""}` : ""}</span></div>
+      ${!walkOnly && html`<div><small>Wait</small><strong>${leg1 ? Math.max(0, leg1.depart.minutes - now.minutes - walk) : "—"} min</strong><span>at ${sa.name}</span></div>
       <div><small>Ride</small><strong>${leg1 ? (transfer && leg2 ? leg1.ride + leg2.ride : leg1.ride) : "—"} min</strong><span>${transfer ? "two routes" : ra.name}</span></div>
-      <div><small>Walking instead</small><strong>${walkDirect} min</strong><span>${total !== null && walkDirect < total ? "faster on foot" : "shuttle is faster"}</span></div>
+      <div><small>Walking instead</small><strong>${walkDirect} min</strong><span>${total !== null && walkDirect < total ? "faster on foot" : "shuttle is faster"}</span></div>`}
     </section>`}
     <ol class="dir-steps">
       <li class="walk">
         <time>${fromMinutes(leaveAt)}</time>
         <span class="dir-node"><${Icon} name="walk" size=${16} /></span>
         <div>
-          <p>Walk · ${walk} min${walkRoute ? ` · ${fmtDistance(walkRoute.length)}` : ""}</p>
+          <p>Walk · ${walk} min${walkRoute ? ` · ${fmtDistance(walkRoute.length)}` : ""} <${DifficultyChip} d=${walkRoute?.difficulty} /></p>
           ${walkRoute && (detail ? html`<${WalkSteps} walk=${walkRoute} />` : html`<details><summary>Details</summary><${WalkSteps} walk=${walkRoute} /></details>`)}
         </div>
       </li>
-      <li>
+      ${!walkOnly && html`<li>
         <time>${T(leg1?.depart)}</time>
         <span class="dir-node stop" style=${{ borderColor: ra.color }}></span>
         <div>
@@ -672,7 +685,7 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
           <p class="dir-ride">${chip(ra)} Ride ${stopsBetween(a.route, a.index, transfer ? tIdx[a.route] : b.index)} stops · ${leg1 ? `${leg1.ride} min` : "—"}</p>
           ${detail && leg1 && html`<p class="dir-note">Scheduled ${T(leg1.depart)}${leg1.depart.estimated ? " (estimated time point)" : ""} · every ${ra.frequency}</p>`}
         </div>
-      </li>
+      </li>`}
       ${transfer &&
       html`<li>
         <time>${T(leg1?.arrive)}</time>
@@ -702,6 +715,145 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo
   </main>`;
 }
 
+/* ---------- Destination planner (Home: pick a stop, get the fastest way there) ---------- */
+
+// Every way to reach `dest` from `pos`: walk all the way, or walk to any stop on any route and ride
+// (with a transfer when needed). Options are sorted by arrival time.
+function planToStop(dest, pos, now, day) {
+  if (!graphReady()) return null;
+  const field = walkField(pos);
+  const rd = ROUTES[dest.route];
+  const sd = rd.stops[dest.index];
+  const options = [];
+  const dWalk = fieldDistanceTo(field, sd);
+  if (dWalk !== null) {
+    const m = walkMinutesFor(dWalk);
+    options.push({ kind: "walk", minutes: m, length: dWalk, arrive: now.minutes + m });
+  }
+  for (const key of ROUTE_KEYS) {
+    ROUTES[key].stops.forEach((s, i) => {
+      if (key === dest.route && i === dest.index) return;
+      const d = fieldDistanceTo(field, s);
+      if (d === null) return;
+      const wm = walkMinutesFor(d);
+      let leg1 = null, leg2 = null, arrive;
+      if (key === dest.route) {
+        leg1 = nextTrip(key, i, dest.index, day, now.minutes + wm);
+        if (!leg1) return;
+        arrive = leg1.arrive.minutes;
+      } else {
+        const t = TRANSFERS[[key, dest.route].sort().join("-")];
+        if (!t) return;
+        leg1 = nextTrip(key, i, t[key], day, now.minutes + wm);
+        if (!leg1) return;
+        leg2 = nextTrip(dest.route, t[dest.route], dest.index, day, leg1.arrive.minutes + 1);
+        if (!leg2) return;
+        arrive = leg2.arrive.minutes;
+      }
+      options.push({ kind: "ride", board: { route: key, index: i }, walkMinutes: wm, walkLength: d, leg1, leg2, arrive });
+    });
+  }
+  options.sort((x, y) => x.arrive - y.arrive || (x.kind === "walk" ? -1 : 1));
+  return { options, best: options[0] ?? null, walk: options.find((o) => o.kind === "walk") ?? null, ride: options.find((o) => o.kind === "ride") ?? null };
+}
+
+function DifficultyChip({ d }) {
+  if (!d) return null;
+  return html`<span class="diff-chip" style=${{ "--c": d.color }} title=${d.note}>${d.level}</span>`;
+}
+
+function HomePlanner({ dest, setDest, pos, live, now, day, routingReady, onGo }) {
+  const sd = dest ? ROUTES[dest.route].stops[dest.index] : null;
+  const planRef = useRef({ key: null, plan: null });
+  let plan = null;
+  if (dest && routingReady) {
+    const key = `${dest.route}${dest.index}|${pos.lat.toFixed(4)},${pos.lon.toFixed(4)}|${now.minutes}|${day}`;
+    if (planRef.current.key !== key) {
+      const p = planToStop(dest, pos, now, day);
+      if (p) {
+        // Refine the top candidates with the real street route (adds climb time and difficulty),
+        // re-check the shuttle connection with the refined walk, then re-rank.
+        if (p.walk) { p.walk.route = walkTo(pos, sd); if (p.walk.route) { p.walk.minutes = p.walk.route.minutes; p.walk.arrive = now.minutes + p.walk.minutes; } }
+        const rides = p.options.filter((o) => o.kind === "ride").slice(0, 3);
+        for (const o of rides) {
+          const bs = ROUTES[o.board.route].stops[o.board.index];
+          o.route = walkTo(pos, bs);
+          if (!o.route) continue;
+          o.walkMinutes = o.route.minutes; o.walkLength = o.route.length;
+          if (o.board.route === dest.route) {
+            o.leg1 = nextTrip(o.board.route, o.board.index, dest.index, day, now.minutes + o.walkMinutes); o.leg2 = null;
+            o.arrive = o.leg1 ? o.leg1.arrive.minutes : Infinity;
+          } else {
+            const t = TRANSFERS[[o.board.route, dest.route].sort().join("-")];
+            o.leg1 = nextTrip(o.board.route, o.board.index, t[o.board.route], day, now.minutes + o.walkMinutes);
+            o.leg2 = o.leg1 ? nextTrip(dest.route, t[dest.route], dest.index, day, o.leg1.arrive.minutes + 1) : null;
+            o.arrive = o.leg2 ? o.leg2.arrive.minutes : Infinity;
+          }
+        }
+        p.options = p.options.filter((o) => o.arrive !== Infinity).sort((x, y) => x.arrive - y.arrive || (x.kind === "walk" ? -1 : 1));
+        p.best = p.options[0] ?? null;
+        p.walk = p.options.find((o) => o.kind === "walk") ?? null;
+        p.ride = p.options.find((o) => o.kind === "ride" && o.route) ?? null;
+      }
+      planRef.current = { key, plan: p };
+    }
+    plan = planRef.current.plan;
+  }
+
+  const picker = html`<select class="plan-select" value=${dest ? `${dest.route}:${dest.index}` : ""} onChange=${(e) => { const [r, i] = e.target.value.split(":"); if (r) setDest({ route: r, index: Number(i) }); }} aria-label="Choose a destination stop">
+    <option value="">Choose a stop…</option>
+    ${ROUTE_KEYS.map((key) => html`<optgroup key=${key} label=${ROUTES[key].name}>${ROUTES[key].stops.map((s, i) => html`<option key=${i} value=${`${key}:${i}`}>${s.name}</option>`)}</optgroup>`)}
+  </select>`;
+
+  if (!dest) {
+    return html`<div class="home-plan">
+      <div class="home-plan-head"><strong>Where to?</strong></div>
+      <p class="home-plan-hint">Tap a stop on the map, or pick one:</p>
+      ${picker}
+    </div>`;
+  }
+
+  const T = (m) => fromMinutes(m);
+  const rideCard = (o, label) => {
+    const rb = ROUTES[o.board.route], sb = rb.stops[o.board.index];
+    const via = o.leg2 ? ROUTES[dest.route].stops[TRANSFERS[[o.board.route, dest.route].sort().join("-")][dest.route]] : null;
+    const w = o.route;
+    return html`<div class="plan-option">
+      <div class="plan-option-head"><span>${label}</span><strong>Arrive ${T(o.arrive)}</strong><small>${o.arrive - now.minutes} min</small></div>
+      <ul class="plan-steps">
+        <li><i class="dir-dot from"></i><span>Walk ${w ? w.minutes : o.walkMinutes} min to <b>${sb.name}</b> (${fmtDistance(w ? w.length : o.walkLength)})</span><${DifficultyChip} d=${w?.difficulty} /></li>
+        <li><span class="dir-chip" style=${{ background: rb.color }}>${rb.shortName}</span><span>${T(o.leg1.depart.minutes)} · ride ${o.leg1.ride} min${via ? ` to ${via.name}` : ""}</span></li>
+        ${o.leg2 && html`<li><span class="dir-chip" style=${{ background: ROUTES[dest.route].color }}>${ROUTES[dest.route].shortName}</span><span>${T(o.leg2.depart.minutes)} · ride ${o.leg2.ride} min</span></li>`}
+        <li><i class="dir-dot to"></i><span><b>${sd.name}</b> ${T(o.arrive)}</span></li>
+      </ul>
+      <button type="button" class="plan-go" onClick=${() => onGo([o.board, dest])}>Directions <${Icon} name="arrow" size=${16} /></button>
+    </div>`;
+  };
+  const walkCard = (o, label) => html`<div class="plan-option">
+    <div class="plan-option-head"><span>${label}</span><strong>Arrive ${T(o.arrive)}</strong><small>${o.route ? o.route.minutes : o.minutes} min</small></div>
+    <ul class="plan-steps">
+      <li><i class="dir-dot from"></i><span>Walk the whole way (${fmtDistance(o.route ? o.route.length : o.length)})</span><${DifficultyChip} d=${o.route?.difficulty} /></li>
+      ${o.route?.difficulty && html`<li class="plan-note"><span>${o.route.difficulty.note}${o.route.ascent ? ` · ↑ ${o.route.ascent} m ↓ ${o.route.descent} m` : ""}</span></li>`}
+    </ul>
+    <button type="button" class="plan-go secondary" onClick=${() => onGo([dest])}>Walk <${Icon} name="walk" size=${16} /></button>
+  </div>`;
+
+  return html`<div class="home-plan">
+    <div class="home-plan-head">
+      <div><small>Where to?</small>${picker}</div>
+      <button type="button" onClick=${() => setDest(null)}>Clear</button>
+    </div>
+    ${!routingReady
+      ? html`<p class="home-plan-hint">Loading street data…</p>`
+      : !plan || !plan.best
+        ? html`<p class="home-plan-hint">No way to get there right now${serviceStatus(now).startsWith("Service") ? ` · ${serviceStatus(now)}` : ""}.</p>`
+        : html`${plan.best.kind === "ride" ? rideCard(plan.best, "Fastest") : walkCard(plan.best, "Fastest")}
+          ${plan.best.kind === "ride" && plan.walk && walkCard(plan.walk, "Or walk")}
+          ${plan.best.kind === "walk" && plan.ride && rideCard(plan.ride, "Or take the Ore Cart")}`}
+    ${!live && html`<p class="home-plan-hint">Planned from campus · turn on location for your real start.</p>`}
+  </div>`;
+}
+
 /* ---------- App ---------- */
 
 function App() {
@@ -718,6 +870,7 @@ function App() {
   const [routeFocus, setRouteFocus] = useState("all");
   const [mapTrip, setMapTrip] = useState([]);
   const [mapTripDetail, setMapTripDetail] = useState(false);
+  const [dest, setDest] = useState(null); // Home: destination stop {route,index}
 
   const geo = useGeolocation();
   const now = useClock();
@@ -746,7 +899,7 @@ function App() {
   };
   const pickMapStop = (sel) => {
     setFocusStop(sel);
-    setMapTrip((t) => (t.length === 0 || t.length === 2 ? [sel] : t[0].route === sel.route && t[0].index === sel.index ? [] : [t[0], sel]));
+    setDest((d) => (d && d.route === sel.route && d.index === sel.index ? null : sel));
   };
   const goHome = () => {
     setRouteExplore(false);
@@ -802,7 +955,7 @@ function App() {
       onBack=${() => setJourney(false)}
     />`;
   }
-  if (mapTripDetail && mapTrip.length === 2) {
+  if (mapTripDetail && mapTrip.length >= 1) {
     return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} geo=${geo} onBack=${() => setMapTripDetail(false)} />`;
   }
 
@@ -1013,7 +1166,7 @@ function App() {
   /* ----- Home ----- */
   return html`<main class="phone-app home-screen">
     <section class="home-map-hero">
-      <${HomeMap} selectedStops=${mapTrip} onSelectStop=${pickMapStop} pos=${pos} live=${live} legs=${routingReady ? tripLegs(mapTrip, pos) : []} />
+      <${HomeMap} selectedStops=${dest ? [dest] : []} onSelectStop=${pickMapStop} pos=${pos} live=${live} legs=${routingReady && dest ? tripLegs([dest], pos) : []} />
       <div class="home-brand">
         <span><img src=${LOGO} alt="" /></span>
         <div><strong>OreTransit</strong><small>GOLDEN, CO</small></div>
@@ -1021,55 +1174,8 @@ function App() {
       <${LocationNote} geo=${geo} className="home-map-note" />
     </section>
     <section class="home-route-list">
-      ${mapTrip.length > 0 &&
-      html`<div class="home-trip-selection">
-        <div class="home-trip-selection-head">
-          <strong>${mapTrip.length === 1 ? "Starting stop set" : "Your trip is ready"}</strong>
-          <button
-            type="button"
-            onClick=${() => {
-              setMapTrip([]);
-              setFocusStop(null);
-            }}
-          >
-            Clear
-          </button>
-        </div>
-        ${mapTrip.map(
-          (sel, i) => html`<div class="home-selected-stop" key=${`${sel.route}-${sel.index}`}>
-            <span style=${{ background: ROUTES[sel.route].color }}>${i + 1}</span>
-            <p><small>${i === 0 ? "Start" : "Destination"} · ${ROUTES[sel.route].name}</small><strong>${ROUTES[sel.route].stops[sel.index].name}</strong></p>
-          </div>`,
-        )}
-        ${mapTrip.length === 1
-          ? html`<div class="home-destination-list">
-              <p>Choose an ending stop</p>
-              <div>
-                ${ROUTES[mapTrip[0].route].stops
-                  .map((stop, index) => ({ stop, index }))
-                  .filter(({ index }) => index !== mapTrip[0].index)
-                  .map(({ stop, index }) => {
-                    const t = nextTrip(mapTrip[0].route, mapTrip[0].index, index, day, now.minutes + walkMinutes(pos, ROUTES[mapTrip[0].route].stops[mapTrip[0].index]));
-                    return html`<button
-                      key=${stop.name}
-                      type="button"
-                      onClick=${() => {
-                        const sel = { route: mapTrip[0].route, index };
-                        setFocusStop(sel);
-                        setMapTrip([mapTrip[0], sel]);
-                      }}
-                    >
-                      <span>${index + 1}</span>
-                      <strong>${stop.name}</strong>
-                      <small>${t ? `${t.ride} min ride · ${fromMinutes(t.depart.minutes)}` : "no trip left today"}</small>
-                      <${Icon} name="arrow" size=${14} />
-                    </button>`;
-                  })}
-              </div>
-              <small>Or tap any stop on the map, including stops on another route.</small>
-            </div>`
-          : html`<button type="button" class="home-view-trip" onClick=${() => setMapTripDetail(true)}>View trip details <${Icon} name="arrow" size=${17} /></button>`}
-      </div>`}
+      <${HomePlanner} dest=${dest} setDest=${setDest} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady}
+        onGo=${(trip) => { setMapTrip(trip); setMapTripDetail(true); }} />
       <div class="home-route-heading">
         <h1>Choose a route</h1>
         <span>${ROUTE_KEYS.length} routes</span>
@@ -1095,11 +1201,9 @@ function App() {
               class="route-walk-time"
               aria-label=${`Set ${r.stops[c.index].name} as your starting stop, a ${c.minutes} minute walk away`}
               onClick=${() => {
-                const sel = { route: key, index: c.index };
                 setRouteKey(key);
                 setRouteFocus(key);
-                setFocusStop(sel);
-                setMapTrip([sel]);
+                setDest({ route: key, index: c.index });
               }}
             >
               <${Icon} name="walk" size=${25} />

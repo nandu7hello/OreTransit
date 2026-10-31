@@ -24,7 +24,8 @@ export function loadGraph() {
         adj[a].push([b, len, ni, fl, true]);
         adj[b].push([a, len, ni, fl, false]);
       }
-      graph = { lat, lon, adj, names: g.names, n };
+      const elev = g.elev ? Float32Array.from(g.elev) : null; // metres, from Open-Meteo terrain data
+      graph = { lat, lon, adj, names: g.names, n, elev };
       return graph;
     });
   return loading;
@@ -100,6 +101,64 @@ export function pathCoords(path) {
   return path.nodes.map((i) => [graph.lat[i], graph.lon[i]]);
 }
 
+// Climb statistics along a node path: total ascent/descent (m) and the steepest sustained grade.
+export function walkStats(path) {
+  const g = graph;
+  if (!g.elev || !path || path.nodes.length < 2) return { ascent: 0, descent: 0, maxGrade: 0 };
+  let ascent = 0, descent = 0, maxGrade = 0;
+  // evaluate grade over windows of at least 40 m to ignore DEM noise
+  let winDist = 0, winRise = 0;
+  for (let i = 0; i < path.nodes.length - 1; i++) {
+    const a = path.nodes[i], b = path.nodes[i + 1];
+    const d = haversine(g.lat[a], g.lon[a], g.lat[b], g.lon[b]);
+    const rise = g.elev[b] - g.elev[a];
+    if (rise > 0) ascent += rise; else descent -= rise;
+    winDist += d; winRise += rise;
+    if (winDist >= 40) { maxGrade = Math.max(maxGrade, Math.abs(winRise) / winDist); winDist = 0; winRise = 0; }
+  }
+  return { ascent: Math.round(ascent), descent: Math.round(descent), maxGrade };
+}
+
+// Walking difficulty from climb and steepness (Golden sits on a hillside, so this matters).
+export function difficulty(stats, lengthM) {
+  const { ascent, maxGrade } = stats;
+  if (ascent >= 60 || maxGrade >= 0.12) return { level: "Hard", color: "#ef633e", note: `${ascent} m climb` + (maxGrade >= 0.12 ? ", steep sections" : "") };
+  if (ascent >= 20 || maxGrade >= 0.07 || lengthM > 1600) return { level: "Moderate", color: "#b88924", note: ascent >= 20 ? `${ascent} m climb` : lengthM > 1600 ? "long walk" : "some incline" };
+  return { level: "Easy", color: "#27766f", note: ascent > 5 ? `${ascent} m climb` : "mostly flat" };
+}
+
+// Walking minutes: 80 m/min on the flat plus 1 min per 10 m of climb (Naismith's rule).
+export function walkMinutesFor(lengthM, ascentM = 0) {
+  return Math.max(1, Math.ceil(lengthM / WALK_SPEED + ascentM / 10));
+}
+
+// Single-source walking distances (metres) from a position to every graph node.
+export function walkField(pos) {
+  const g = graph;
+  const s = nearestNode(pos.lat, pos.lon, "walk");
+  const dist = new Float64Array(g.n).fill(Infinity);
+  if (s < 0) return { dist, source: s };
+  const heap = new Heap(); dist[s] = 0; heap.push(0, s);
+  while (heap.size) {
+    const [d, u] = heap.pop();
+    if (d > dist[u]) continue;
+    for (const e of g.adj[u]) {
+      if (!usable(e, "walk", e[4])) continue;
+      const nd = d + e[1];
+      if (nd < dist[e[0]]) { dist[e[0]] = nd; heap.push(nd, e[0]); }
+    }
+  }
+  const head = haversine(pos.lat, pos.lon, g.lat[s], g.lon[s]);
+  return { dist, source: s, head };
+}
+
+// Straight-line-free walking distance from a computed field to a stop.
+export function fieldDistanceTo(field, stop) {
+  const t = nearestNode(stop.lat, stop.lon, "walk");
+  if (t < 0 || field.dist[t] === Infinity) return null;
+  return field.head + field.dist[t] + haversine(graph.lat[t], graph.lon[t], stop.lat, stop.lon);
+}
+
 function bearing(aLat, aLon, bLat, bLon) {
   const toRad = (d) => (d * Math.PI) / 180;
   const y = Math.sin(toRad(bLon - aLon)) * Math.cos(toRad(bLat));
@@ -170,7 +229,8 @@ export function walkTo(pos, stop) {
   const tail = haversine(graph.lat[t], graph.lon[t], stop.lat, stop.lon);
   const coords = [[pos.lat, pos.lon], ...pathCoords(path), [stop.lat, stop.lon]];
   const length = head + path.length + tail;
-  return { coords, length, minutes: Math.max(1, Math.ceil(length / WALK_SPEED)), steps: walkingSteps(path, stop.name) };
+  const stats = walkStats(path);
+  return { coords, length, minutes: walkMinutesFor(length, stats.ascent), steps: walkingSteps(path, stop.name), ...stats, difficulty: difficulty(stats, length) };
 }
 
 // Shuttle paths along streets, stop to stop around each loop. Cached per route.

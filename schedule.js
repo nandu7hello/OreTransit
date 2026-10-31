@@ -296,14 +296,24 @@ export function nextDepartures(routeKey, stopIndex, day, nowMinutes, count = 3) 
 // on its next lap, so the arrival is taken from the following timed trip.
 export function nextTrip(routeKey, fromIndex, toIndex, day, nowMinutes) {
   const rows = (SCHEDULE[routeKey]?.[day] ?? []).map(tripTimes);
+  const firstTime = (r) => r.find(Boolean)?.minutes ?? Infinity;
+  const lastTime = (r) => Math.max(...r.filter(Boolean).map((c) => c.minutes));
   for (let k = 0; k < rows.length; k++) {
     const a = rows[k][fromIndex];
     if (!a || a.minutes < nowMinutes) continue;
-    for (let j = k; j < rows.length; j++) {
+    if (toIndex > fromIndex) {
+      const b = rows[k][toIndex];
+      if (b && b.minutes >= a.minutes) return { depart: a, arrive: b, ride: b.minutes - a.minutes };
+      continue;
+    }
+    // Destination is earlier in the loop: the same vehicle reaches it on its next lap, which is the
+    // first listed trip starting at/after this trip ends (not the next row, which is a different shuttle).
+    const end = lastTime(rows[k]);
+    for (let j = k + 1; j < rows.length; j++) {
+      if (firstTime(rows[j]) + 1 < end) continue;
       const b = rows[j][toIndex];
-      if (b && b.minutes >= a.minutes && (j > k || toIndex > fromIndex)) {
-        return { depart: a, arrive: b, ride: b.minutes - a.minutes };
-      }
+      if (b && b.minutes >= a.minutes) return { depart: a, arrive: b, ride: b.minutes - a.minutes };
+      break;
     }
   }
   return null;

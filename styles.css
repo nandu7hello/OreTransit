@@ -572,3 +572,26 @@ h1{letter-spacing:-.7px;margin:0;font-family:DM Serif Display,serif;font-size:31
 .home-stop-marker,.stop-marker,.overview-stop-marker,.recommended-spot-marker{z-index:3}
 .home-location b,.user-location b,.overview-user-location{pointer-events:none}
 .dir-nav-banner small{font-size:11px;color:#ffffff99;margin-top:2px}
+
+/* ---- Home planner ---- */
+.home-plan{background:#fffdf7;border:1px solid #1023431a;border-radius:20px;padding:16px 18px;margin:0 0 18px;box-shadow:0 10px 28px #1d273512}
+.home-plan-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.home-plan-head>div{display:grid;gap:4px;flex:1;min-width:0}
+.home-plan-head strong{font-family:DM Serif Display,serif;font-size:22px;color:#102343}
+.home-plan-head small{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#b88924;font-weight:700}
+.home-plan-head button{border:0;background:#ece7da;color:#102343;border-radius:999px;padding:6px 12px;font:600 12px DM Sans,sans-serif;cursor:pointer}
+.home-plan-hint{margin:8px 0 10px;font-size:13px;color:#75787d}
+.plan-select{width:100%;font:600 15px DM Sans,sans-serif;color:#102343;background:#fff;border:1px solid #dcd6c8;border-radius:12px;padding:10px 12px;appearance:auto}
+.plan-option{margin-top:14px;border-top:1px solid #1023431a;padding-top:12px}
+.plan-option-head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.plan-option-head span{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#b88924;font-weight:700}
+.plan-option-head strong{font:700 15px DM Sans,sans-serif;color:#102343;margin-left:auto}
+.plan-option-head small{font-size:12px;color:#75787d}
+.plan-steps{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.plan-steps li{display:flex;align-items:center;gap:8px;font-size:14px;color:#102343;line-height:1.3}
+.plan-steps li.plan-note{font-size:12px;color:#75787d;padding-left:17px}
+.plan-steps .dir-dot{width:9px;height:9px;flex:none}
+.plan-go{margin-top:12px;width:100%;display:flex;justify-content:center;align-items:center;gap:8px;background:#102343;color:#f2c94c;border:0;border-radius:14px;padding:12px;font:700 14px DM Sans,sans-serif;cursor:pointer}
+.plan-go.secondary{background:#ece7da;color:#102343}
+.diff-chip{display:inline-block;margin-left:auto;background:var(--c);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.dir-steps p .diff-chip{margin-left:6px;vertical-align:middle}

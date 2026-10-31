@@ -67,6 +67,13 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
   along its streets between stops (one-way streets respected). Trip detail and journey screens show
   these on a real street map (Leaflet + OpenStreetMap tiles); the Home and Explore artwork maps draw
   the same paths on top of the official map art.
+- **Where to?** On the Home screen, tap any stop (or pick it from the list) and the app plans the
+  fastest way there from your position: it compares walking all the way against walking to every
+  stop on every route and riding (with a transfer when needed), using the real timetable, and shows
+  the best option plus the alternative.
+- **Walking difficulty**: `graph.json` carries terrain elevation (Open-Meteo, 90 m DEM) for every
+  node. Each walk gets a climb total and steepest grade, rated Easy / Moderate / Hard, and walking
+  times add one minute per 10 m of climb (Naismith's rule).
 - Geolocation only works on HTTPS (or localhost), so host the app before testing GPS on a phone.
 
 ## Known limitations
