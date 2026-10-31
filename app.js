@@ -190,10 +190,30 @@ function useClock() {
 
 /* ---------- Pan / zoom (drag + pinch) ---------- */
 
-function usePanZoom(view, setView, { min = 1, max = 2.5 } = {}) {
+function usePanZoom(view, setView, { min = 1, max = 2.5, box = null } = {}) {
   const pointers = useRef(new Map());
   const gesture = useRef(null);
+  const lastTap = useRef(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const clampZoom = (z) => Math.min(max, Math.max(min, z));
+
+  // Zoom so that the map point under (ax, ay) (container pixels) stays put.
+  const zoomAt = (newZoom, ax, ay) => {
+    setView((v) => {
+      const z = clampZoom(newZoom);
+      const k = z / v.zoom;
+      return { zoom: z, x: ax - (ax - v.x) * k, y: ay - (ay - v.y) * k };
+    });
+  };
+  const local = (clientX, clientY) => {
+    const r = box?.current?.getBoundingClientRect();
+    return r ? { x: clientX - r.left, y: clientY - r.top } : { x: clientX, y: clientY };
+  };
+  const center = () => {
+    const el = box?.current;
+    return el ? { x: el.clientWidth / 2, y: el.clientHeight / 2 } : { x: 0, y: 0 };
+  };
 
   const onPointerDown = (e) => {
     if (e.target.closest("button")) return;
@@ -201,10 +221,14 @@ function usePanZoom(view, setView, { min = 1, max = 2.5 } = {}) {
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const pts = [...pointers.current.values()];
     if (pts.length === 1) {
-      gesture.current = { kind: "pan", startX: e.clientX, startY: e.clientY, panX: view.x, panY: view.y };
+      // double-tap / double-click zooms in on that point
+      const t = Date.now();
+      if (t - lastTap.current < 320) { const l = local(e.clientX, e.clientY); zoomAt(viewRef.current.zoom * 1.8, l.x, l.y); lastTap.current = 0; gesture.current = null; return; }
+      lastTap.current = t;
+      gesture.current = { kind: "pan", startX: e.clientX, startY: e.clientY, panX: viewRef.current.x, panY: viewRef.current.y };
     } else if (pts.length === 2) {
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      gesture.current = { kind: "pinch", startDist: dist, startZoom: view.zoom };
+      gesture.current = { kind: "pinch", startDist: dist, startZoom: viewRef.current.zoom };
     }
   };
   const onPointerMove = (e) => {
@@ -217,15 +241,40 @@ function usePanZoom(view, setView, { min = 1, max = 2.5 } = {}) {
       const pts = [...pointers.current.values()];
       if (pts.length < 2) return;
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      setView((v) => ({ ...v, zoom: clampZoom((g.startZoom * dist) / g.startDist) }));
+      const mid = local((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+      const z = clampZoom((g.startZoom * dist) / g.startDist);
+      if (g.lastMid) {
+        // keep the pinch midpoint anchored while fingers move
+        setView((v) => { const k = z / v.zoom; return { zoom: z, x: mid.x - (mid.x - v.x) * k + (mid.x - g.lastMid.x), y: mid.y - (mid.y - v.y) * k + (mid.y - g.lastMid.y) }; });
+      } else zoomAt(z, mid.x, mid.y);
+      g.lastMid = mid;
     }
   };
   const end = (e) => {
     pointers.current.delete(e.pointerId);
-    gesture.current = null;
+    if (pointers.current.size === 0) gesture.current = null;
+    else if (pointers.current.size === 1) { const [pt] = pointers.current.values(); gesture.current = { kind: "pan", startX: pt.x, startY: pt.y, panX: viewRef.current.x, panY: viewRef.current.y }; }
   };
-  const zoomBy = (delta) => setView((v) => ({ ...v, zoom: clampZoom(v.zoom + delta) }));
-  return { handlers: { onPointerDown, onPointerMove, onPointerUp: end, onPointerCancel: end }, zoomBy };
+  const onWheel = (e) => {
+    e.preventDefault();
+    const l = local(e.clientX, e.clientY);
+    zoomAt(viewRef.current.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), l.x, l.y);
+  };
+
+  // Stop iOS Safari from zooming the whole page when pinching on the map.
+  useEffect(() => {
+    const el = box?.current; if (!el) return;
+    const block = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
+    const blockGesture = (e) => e.preventDefault();
+    el.addEventListener("touchmove", block, { passive: false });
+    el.addEventListener("touchstart", block, { passive: false });
+    el.addEventListener("gesturestart", blockGesture);
+    el.addEventListener("gesturechange", blockGesture);
+    return () => { el.removeEventListener("touchmove", block); el.removeEventListener("touchstart", block); el.removeEventListener("gesturestart", blockGesture); el.removeEventListener("gesturechange", blockGesture); };
+  }, [box?.current]);
+
+  const zoomBy = (delta) => { const c = center(); zoomAt(viewRef.current.zoom * (delta > 0 ? 1.35 : 1 / 1.35), c.x, c.y); };
+  return { handlers: { onPointerDown, onPointerMove, onPointerUp: end, onPointerCancel: end, onWheel }, zoomBy };
 }
 
 const transformStyle = (v) => ({ transform: `translate3d(${v.x}px, ${v.y}px, 0) scale(${v.zoom})`, "--inv": (1 / v.zoom).toFixed(3) });
@@ -375,7 +424,7 @@ function YouMarker({ fitKey, pos, live, className, label }) {
 function HomeMap({ selectedStops, onSelectStop, pos, live, legs = [] }) {
   const box = useRef(null);
   const [view, setView] = useState({ zoom: 1.18, x: -24, y: -12 });
-  const { handlers, zoomBy } = usePanZoom(view, setView, { max: 2.1 });
+  const { handlers, zoomBy } = usePanZoom(view, setView, { max: 4, box });
   const reset = () => {
     const w = box.current?.clientWidth ?? 490;
     setView({ zoom: 1.18, x: w * -0.05, y: w * -0.025 });
@@ -425,7 +474,7 @@ function RouteMap({ routeKey, selectedStops, onSelect, compact = false, pos, liv
   const route = ROUTES[routeKey];
   const box = useRef(null);
   const [view, setView] = useState({ zoom: ROUTE_MAP_VIEW[routeKey].zoom, x: 0, y: 0 });
-  const { handlers, zoomBy } = usePanZoom(view, setView, { max: 2.6 });
+  const { handlers, zoomBy } = usePanZoom(view, setView, { max: 5, box });
   const reset = () => {
     const w = box.current?.clientWidth ?? 420;
     const v = ROUTE_MAP_VIEW[routeKey];
@@ -948,7 +997,8 @@ function App() {
   const closestKey = ROUTE_KEYS.reduce((best, k) => (closestByRoute[k].minutes < closestByRoute[best].minutes ? k : best), "gold");
   const closest = ROUTES[closestKey];
 
-  const overviewPan = usePanZoom(overview, setOverview, { max: 2.5 });
+  const overviewBox = useRef(null);
+  const overviewPan = usePanZoom(overview, setOverview, { max: 6, box: overviewBox });
 
   const toggleStop = (i) => {
     setJourney(false);
@@ -1091,7 +1141,7 @@ function App() {
           </button>`,
         )}
       </div>
-      <div class="route-overview full-screen-map interactive-overview-map" ...${overviewPan.handlers}>
+      <div class="route-overview full-screen-map interactive-overview-map" ref=${overviewBox} ...${overviewPan.handlers}>
         <div class="overview-map-canvas" style=${transformStyle(overview)}>
           <img src=${OVERVIEW_MAP} alt="Combined map showing the Gold, Silver, and Tungsten Ore Cart routes" />
           <${YouMarker} fitKey="overview" pos=${pos} live=${live} className="overview-user-location" label=${live ? "You" : "Campus"} />
