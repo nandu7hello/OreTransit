@@ -114,7 +114,7 @@ function useGeolocation() {
   const watchId = useRef(null);
   const secure = typeof window !== "undefined" && (window.isSecureContext || location.hostname === "localhost");
 
-  const onFix = (p) => setLoc({ status: "on", pos: { lat: p.coords.latitude, lon: p.coords.longitude }, accuracy: p.coords.accuracy });
+  const onFix = (p) => setLoc({ status: "on", pos: { lat: p.coords.latitude, lon: p.coords.longitude }, accuracy: p.coords.accuracy, at: Date.now() });
   const onError = (err) =>
     setLoc((l) => {
       if (err.code === 1) return { status: "denied", pos: null, accuracy: null };
@@ -164,7 +164,14 @@ function useGeolocation() {
     };
   }, []);
 
-  return { ...loc, retry: start };
+  // One fresh fix right now (used as a polling fallback while navigating: some phones only
+  // deliver watchPosition updates on large movements).
+  const refresh = () => {
+    if (!("geolocation" in navigator) || !secure) return;
+    navigator.geolocation.getCurrentPosition(onFix, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+  };
+
+  return { ...loc, retry: start, refresh };
 }
 
 function useClock() {
@@ -336,7 +343,7 @@ function WalkSteps({ walk }) {
 /* ---------- "You" marker ---------- */
 
 function YouMarker({ fitKey, pos, live, className, label }) {
-  if (!pos) return null;
+  if (!pos || !live) return null;
   const p = geoToMap(fitKey, pos.lat, pos.lon);
   if (!inMap(p)) return null;
   return html`<span class=${`${className} ${live ? "live" : "assumed"}`} style=${{ left: `${p.x}%`, top: `${p.y}%` }}>
@@ -537,17 +544,40 @@ function alongPolyline(pos, coords) {
   return { ...best, remain };
 }
 
-function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady }) {
+function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, geo }) {
   const [nav, setNav] = useState(false);      // Start pressed: live navigation
   const [detail, setDetail] = useState(false); // Simple / Details
+  const [, tick] = useState(0);
+  const legCache = useRef({ key: null, legs: [] });
+
+  // Live navigation: poll for a fresh fix every 4 s, keep the screen awake, re-render for the age readout.
+  useEffect(() => {
+    if (!nav) return;
+    geo?.refresh?.();
+    const poll = setInterval(() => { geo?.refresh?.(); tick((n) => n + 1); }, 4000);
+    let lock = null;
+    navigator.wakeLock?.request?.("screen").then((l) => { lock = l; }).catch(() => {});
+    const onVis = () => { if (document.visibilityState === "visible") { geo?.refresh?.(); navigator.wakeLock?.request?.("screen").then((l) => { lock = l; }).catch(() => {}); } };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(poll); document.removeEventListener("visibilitychange", onVis); lock?.release?.().catch(() => {}); };
+  }, [nav]);
   const [a, b] = trip;
   const ra = ROUTES[a.route], rb = ROUTES[b.route];
   const sa = ra.stops[a.index], sb = rb.stops[b.index];
   const transfer = a.route !== b.route;
   const tIdx = transfer ? TRANSFERS[[a.route, b.route].sort().join("-")] : null;
-  const legs = routingReady ? tripLegs(trip, pos) : [];
+  // Recompute the street route only when the position moved more than ~8 m (cheap on phones).
+  let legs = [];
+  if (routingReady) {
+    const c = legCache.current;
+    const tripKey = trip.map((t) => t.route + t.index).join("|");
+    const moved = !c.pos || distanceMeters(c.pos, pos) > 8 || c.key !== tripKey;
+    if (moved) { legCache.current = { key: tripKey, pos: { ...pos }, legs: tripLegs(trip, pos) }; }
+    legs = legCache.current.legs;
+  }
   const walkRoute = legs.find((l) => l.kind === "walk")?.walk ?? null;
   const walk = walkRoute ? walkRoute.minutes : walkMinutes(pos, sa);
+  const fixAge = geo?.at ? Math.round((Date.now() - geo.at) / 1000) : null;
 
   let leg1 = null, leg2 = null;
   if (transfer) {
@@ -590,7 +620,10 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady }) {
   return html`<main class=${`phone-app dir-screen ${nav ? "nav" : ""}`}>
     ${nav
       ? html`<header class="dir-nav-banner">
-          <div><strong>${banner.title}</strong><span>${banner.sub}</span></div>
+          <div>
+            <strong>${banner.title}</strong><span>${banner.sub}</span>
+            <small>${live ? `GPS ±${Math.round(geo?.accuracy ?? 0)} m · updated ${fixAge === null ? "—" : fixAge < 2 ? "just now" : fixAge + "s ago"}` : "Location off · tap the chip on the Home screen to turn it on"}</small>
+          </div>
           <button type="button" class="dir-exit" onClick=${() => setNav(false)} aria-label="Exit navigation"><${Icon} name="x" size=${18} /></button>
         </header>`
       : html`<header class="dir-header">
@@ -765,12 +798,12 @@ function App() {
   if (journey && startStop && endStop) {
     return html`<${DirectionsScreen}
       trip=${[{ route: routeKey, index: selectedStops[0] }, { route: routeKey, index: selectedStops[1] }]}
-      pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady}
+      pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} geo=${geo}
       onBack=${() => setJourney(false)}
     />`;
   }
   if (mapTripDetail && mapTrip.length === 2) {
-    return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} onBack=${() => setMapTripDetail(false)} />`;
+    return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} geo=${geo} onBack=${() => setMapTripDetail(false)} />`;
   }
 
   /* ----- Explore one route ----- */

@@ -566,3 +566,9 @@ h1{letter-spacing:-.7px;margin:0;font-family:DM Serif Display,serif;font-size:31
 .dir-summary{flex-wrap:wrap;row-gap:8px}
 .dir-summary strong,.dir-summary span{white-space:nowrap}
 .dir-summary .dir-toggle{margin-left:auto}
+
+/* ---- Location marker never blocks taps; stops stay clickable ---- */
+.home-location,.user-location,.overview-user-location{pointer-events:none!important;z-index:2}
+.home-stop-marker,.stop-marker,.overview-stop-marker,.recommended-spot-marker{z-index:3}
+.home-location b,.user-location b,.overview-user-location{pointer-events:none}
+.dir-nav-banner small{font-size:11px;color:#ffffff99;margin-top:2px}
