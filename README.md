@@ -45,7 +45,7 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
 | `styles.css` | Styles (ported from the Figma Make mockup) |
 | `sw.js` | Offline cache |
 | `manifest.webmanifest` | Install metadata and icons |
-| `assets/` | Route maps and logo |
+| `assets/` | Map images (rendered by the project from OpenStreetMap data, see below) and logo |
 | `vendor/preact-standalone.module.js` | Preact + htm, no build step needed |
 
 ## Live location and real times
@@ -79,6 +79,14 @@ projects. Requires Node.js, Xcode (iOS) and Android Studio (Android).
   node. Each walk gets a climb total and steepest grade, rated Easy / Moderate / Hard, and walking
   times add one minute per 10 m of climb (Naismith's rule).
 - Geolocation only works on HTTPS (or localhost), so host the app before testing GPS on a phone.
+
+## Map images
+
+The overview and route maps are generated, not traced: `tools/prepmap.py` projects
+the OpenStreetMap streets, Clear Creek, parks, the shuttle paths and the stops into pixel space,
+and `tools/RenderMap.ps1` (PowerShell + System.Drawing) draws them in the app's style. Because the
+projection is known exactly, every cart icon sits on its route line and `MAP_FIT` is exact.
+To redraw after changing a stop: run `prepmap.py`, then `RenderMap.ps1 -Key <overview|gold|silver|tungsten>`.
 
 ## Known limitations
 
