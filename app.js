@@ -240,7 +240,7 @@ function tripLegs(trip, pos) {
   const a = trip[0];
   const ra = ROUTES[a.route];
   const walk = pos ? walkTo(pos, ra.stops[a.index]) : null;
-  if (walk) legs.push({ coords: walk.coords, color: "#2f6fed", dashed: true, kind: "walk", walk });
+  if (walk) legs.push({ coords: walk.coords, color: "#102343", dashed: true, kind: "walk", walk });
   if (trip.length === 2) {
     const b = trip[1];
     if (a.route === b.route) {
@@ -283,6 +283,13 @@ function StreetMap({ legs, markers, pos, live, height = 320, follow = false }) {
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
+  // keep Leaflet's internal size in sync when the container height changes (e.g. entering navigation)
+  useEffect(() => {
+    const map = mapRef.current; if (!map) return;
+    const id = setTimeout(() => { map.invalidateSize(); if (follow && pos) map.setView([pos.lat, pos.lon], 17); }, 60);
+    return () => clearTimeout(id);
+  }, [height, follow]);
+
   // draw legs + markers
   useEffect(() => {
     const L = window.L, map = mapRef.current; if (!L || !map) return;
@@ -313,7 +320,7 @@ function StreetMap({ legs, markers, pos, live, height = 320, follow = false }) {
       youRef.current.setLatLng([pos.lat, pos.lon]);
       youRef.current.setIcon(L.divIcon({ className: `lf-you ${live ? "live" : ""}`, html: "<i></i>", iconSize: [18, 18], iconAnchor: [9, 9] }));
     }
-    if (follow) map.panTo([pos.lat, pos.lon], { animate: true });
+    if (follow) map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 17), { animate: true });
   }, [pos?.lat, pos?.lon, live, follow]);
 
   return html`<div class="street-map" ref=${box} style=${{ height: `${height}px` }} aria-label="Street map with directions"></div>`;
@@ -501,14 +508,38 @@ function LocationNote({ geo, className }) {
     </div>`}`;
 }
 
-/* ---------- Directions (Google Maps style) ---------- */
+/* ---------- Directions (Google Maps style, app palette) ---------- */
 
 function stopsBetween(routeKey, from, to) {
   const n = ROUTES[routeKey].stops.length;
   return ((to - from) % n + n) % n;
 }
 
-function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liveMode }) {
+// Distance from a point to a polyline, and the remaining length from the nearest point to the end.
+function alongPolyline(pos, coords) {
+  let best = { d: Infinity, i: 0, t: 0 };
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [aLat, aLon] = coords[i], [bLat, bLon] = coords[i + 1];
+    const cos = Math.cos((pos.lat * Math.PI) / 180);
+    const ax = (aLon - pos.lon) * 111000 * cos, ay = (aLat - pos.lat) * 111000;
+    const bx = (bLon - pos.lon) * 111000 * cos, by = (bLat - pos.lat) * 111000;
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    const px = ax + t * dx, py = ay + t * dy;
+    const d = Math.hypot(px, py);
+    if (d < best.d) best = { d, i, t };
+  }
+  let remain = 0;
+  for (let i = best.i; i < coords.length - 1; i++) {
+    const seg = distanceMeters({ lat: coords[i][0], lon: coords[i][1] }, { lat: coords[i + 1][0], lon: coords[i + 1][1] });
+    remain += i === best.i ? seg * (1 - best.t) : seg;
+  }
+  return { ...best, remain };
+}
+
+function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady }) {
+  const [nav, setNav] = useState(false);      // Start pressed: live navigation
+  const [detail, setDetail] = useState(false); // Simple / Details
   const [a, b] = trip;
   const ra = ROUTES[a.route], rb = ROUTES[b.route];
   const sa = ra.stops[a.index], sb = rb.stops[b.index];
@@ -529,37 +560,75 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liv
   const leaveAt = leg1 ? leg1.depart.minutes - walk : now.minutes;
   const total = arrive ? arrive.minutes - leaveAt : null;
   const T = (t) => (t ? fromMinutes(t.minutes) : "—");
+  const walkDirect = walkMinutes(pos, sa) + walkMinutes(sa, sb);
+  const viaStop = transfer ? ra.stops[tIdx[a.route]] : null;
+
   const markers = [
     { lat: sa.lat, lon: sa.lon, color: ra.color, label: "", name: sa.name },
-    ...(transfer ? [{ lat: ra.stops[tIdx[a.route]].lat, lon: ra.stops[tIdx[a.route]].lon, color: "#102343", label: "", name: ra.stops[tIdx[a.route]].name }] : []),
+    ...(transfer ? [{ lat: viaStop.lat, lon: viaStop.lon, color: "#102343", label: "", name: viaStop.name }] : []),
     { lat: sb.lat, lon: sb.lon, color: rb.color, label: "", name: sb.name },
   ];
   const chip = (r) => html`<span class="dir-chip" style=${{ background: r.color }}>${r.shortName}</span>`;
 
-  return html`<main class="phone-app dir-screen">
-    <header class="dir-header">
-      <button type="button" class="icon-button" onClick=${onBack} aria-label="Back"><${Icon} name="back" /></button>
-      <div class="dir-endpoints">
-        <span><i class="dir-dot from"></i>${live ? "Your location" : "Campus"}</span>
-        <span><i class="dir-dot to"></i>${sb.name}</span>
-      </div>
-    </header>
+  // ---- live navigation state ----
+  let banner = null;
+  if (nav) {
+    const distToStop = distanceMeters(pos, sa);
+    if (!leg1) banner = { title: "No more shuttles today", sub: "Service has ended on this route." };
+    else if (now.minutes >= leg1.depart.minutes && distToStop > 60 && now.minutes < (arrive?.minutes ?? Infinity)) {
+      banner = { title: `Ride the ${ra.name}`, sub: transfer ? `Exit at ${viaStop.name} · ${T(leg1.arrive)}` : `Exit at ${sb.name} · ${T(leg1.arrive)}` };
+    } else if (distToStop <= 40) {
+      banner = { title: `Board the ${ra.name}`, sub: `At ${sa.name} · leaves ${minutesLabel(leg1.depart.minutes, now.minutes)} (${T(leg1.depart)})` };
+    } else if (walkRoute && walkRoute.steps.length) {
+      const steps = walkRoute.steps.filter((s) => s.coords.length > 1);
+      let cur = steps[0], curRemain = cur ? alongPolyline(pos, cur.coords).remain : 0, bestD = Infinity;
+      for (const s of steps) { const r = alongPolyline(pos, s.coords); if (r.d < bestD) { bestD = r.d; cur = s; curRemain = r.remain; } }
+      banner = { title: cur ? cur.text : `Walk to ${sa.name}`, sub: `${fmtDistance(curRemain)} · then ${fmtDistance(Math.max(0, walkRoute.length - curRemain))} more · shuttle ${T(leg1.depart)}` };
+    } else banner = { title: `Walk to ${sa.name}`, sub: `About ${walk} min · shuttle ${T(leg1.depart)}` };
+  }
+
+  return html`<main class=${`phone-app dir-screen ${nav ? "nav" : ""}`}>
+    ${nav
+      ? html`<header class="dir-nav-banner">
+          <div><strong>${banner.title}</strong><span>${banner.sub}</span></div>
+          <button type="button" class="dir-exit" onClick=${() => setNav(false)} aria-label="Exit navigation"><${Icon} name="x" size=${18} /></button>
+        </header>`
+      : html`<header class="dir-header">
+          <button type="button" class="icon-button" onClick=${onBack} aria-label="Back"><${Icon} name="back" /></button>
+          <div class="dir-endpoints">
+            <span><i class="dir-dot from"></i>${live ? "Your location" : "Campus (location off)"}</span>
+            <span><i class="dir-dot to"></i>${sb.name}</span>
+          </div>
+        </header>`}
     <section class="dir-map">
       ${window.L
-        ? html`<${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${Math.round(Math.min(420, window.innerHeight * 0.42))} follow=${liveMode && live} />`
+        ? html`<${StreetMap} legs=${legs} markers=${markers} pos=${pos} live=${live} height=${Math.round(Math.min(nav ? 520 : 420, window.innerHeight * (nav ? 0.55 : 0.4)))} follow=${nav} />`
         : html`<${RouteMap} routeKey=${a.route} selectedStops=${transfer ? [a.index] : [a.index, b.index]} compact=${true} pos=${pos} live=${live} />`}
     </section>
     <section class="dir-summary">
-      <strong>${total !== null ? `${total} min` : "No more trips today"}</strong>
-      <span>${leg1 ? `${fromMinutes(leaveAt)} – ${T(arrive)}` : `Service ${day === "weekday" ? SERVICE_HOURS.weekday : SERVICE_HOURS.weekend}`}</span>
+      <div>
+        <strong>${total !== null ? `${total} min` : "No more trips today"}</strong>
+        <span>${leg1 ? `${fromMinutes(leaveAt)} – ${T(arrive)}` : `Service ${day === "weekday" ? SERVICE_HOURS.weekday : SERVICE_HOURS.weekend}`}</span>
+      </div>
+      <div class="dir-toggle" role="tablist" aria-label="Level of detail">
+        <button type="button" role="tab" aria-selected=${!detail} class=${detail ? "" : "active"} onClick=${() => setDetail(false)}>Simple</button>
+        <button type="button" role="tab" aria-selected=${detail} class=${detail ? "active" : ""} onClick=${() => setDetail(true)}>Details</button>
+      </div>
     </section>
+    ${detail &&
+    html`<section class="dir-facts">
+      <div><small>Walk to stop</small><strong>${walk} min</strong><span>${walkRoute ? fmtDistance(walkRoute.length) : "straight line"}</span></div>
+      <div><small>Wait</small><strong>${leg1 ? Math.max(0, leg1.depart.minutes - now.minutes - walk) : "—"} min</strong><span>at ${sa.name}</span></div>
+      <div><small>Ride</small><strong>${leg1 ? (transfer && leg2 ? leg1.ride + leg2.ride : leg1.ride) : "—"} min</strong><span>${transfer ? "two routes" : ra.name}</span></div>
+      <div><small>Walking instead</small><strong>${walkDirect} min</strong><span>${total !== null && walkDirect < total ? "faster on foot" : "shuttle is faster"}</span></div>
+    </section>`}
     <ol class="dir-steps">
       <li class="walk">
         <time>${fromMinutes(leaveAt)}</time>
         <span class="dir-node"><${Icon} name="walk" size=${16} /></span>
         <div>
           <p>Walk · ${walk} min${walkRoute ? ` · ${fmtDistance(walkRoute.length)}` : ""}</p>
-          ${walkRoute && html`<details><summary>Details</summary><${WalkSteps} walk=${walkRoute} /></details>`}
+          ${walkRoute && (detail ? html`<${WalkSteps} walk=${walkRoute} />` : html`<details><summary>Details</summary><${WalkSteps} walk=${walkRoute} /></details>`)}
         </div>
       </li>
       <li>
@@ -568,6 +637,7 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liv
         <div>
           <p><b>${sa.name}</b></p>
           <p class="dir-ride">${chip(ra)} Ride ${stopsBetween(a.route, a.index, transfer ? tIdx[a.route] : b.index)} stops · ${leg1 ? `${leg1.ride} min` : "—"}</p>
+          ${detail && leg1 && html`<p class="dir-note">Scheduled ${T(leg1.depart)}${leg1.depart.estimated ? " (estimated time point)" : ""} · every ${ra.frequency}</p>`}
         </div>
       </li>
       ${transfer &&
@@ -575,8 +645,9 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liv
         <time>${T(leg1?.arrive)}</time>
         <span class="dir-node stop" style=${{ borderColor: ra.color }}></span>
         <div>
-          <p><b>${ra.stops[tIdx[a.route]].name}</b></p>
+          <p><b>${viaStop.name}</b></p>
           <p class="dir-ride muted">Transfer · wait ${leg1 && leg2 ? leg2.depart.minutes - leg1.arrive.minutes : "—"} min</p>
+          ${detail && html`<p class="dir-note">Get off the ${ra.shortName} Route and wait at the same stop for the ${rb.shortName} Route.</p>`}
         </div>
       </li>
       <li>
@@ -585,14 +656,16 @@ function DirectionsScreen({ trip, pos, live, now, day, onBack, routingReady, liv
         <div>
           <p><b>${rb.stops[tIdx[b.route]].name}</b></p>
           <p class="dir-ride">${chip(rb)} Ride ${stopsBetween(b.route, tIdx[b.route], b.index)} stops · ${leg2 ? `${leg2.ride} min` : "—"}</p>
+          ${detail && leg2 && html`<p class="dir-note">Scheduled ${T(leg2.depart)}${leg2.depart.estimated ? " (estimated time point)" : ""} · every ${rb.frequency}</p>`}
         </div>
       </li>`}
       <li class="end">
         <time>${T(arrive)}</time>
         <span class="dir-node stop end" style=${{ borderColor: rb.color }}></span>
-        <div><p><b>${sb.name}</b></p></div>
+        <div><p><b>${sb.name}</b></p>${detail && html`<p class="dir-note">Times are from the published Ore Cart timetable, not live tracking.</p>`}</div>
       </li>
     </ol>
+    ${!nav && html`<button type="button" class="dir-start" onClick=${() => setNav(true)}><${Icon} name="gps" size=${18} /> Start</button>`}
   </main>`;
 }
 
@@ -692,12 +765,12 @@ function App() {
   if (journey && startStop && endStop) {
     return html`<${DirectionsScreen}
       trip=${[{ route: routeKey, index: selectedStops[0] }, { route: routeKey, index: selectedStops[1] }]}
-      pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} liveMode=${true}
+      pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady}
       onBack=${() => setJourney(false)}
     />`;
   }
   if (mapTripDetail && mapTrip.length === 2) {
-    return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} liveMode=${true} onBack=${() => setMapTripDetail(false)} />`;
+    return html`<${DirectionsScreen} trip=${mapTrip} pos=${pos} live=${live} now=${now} day=${day} routingReady=${routingReady} onBack=${() => setMapTripDetail(false)} />`;
   }
 
   /* ----- Explore one route ----- */
